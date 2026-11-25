@@ -25,6 +25,7 @@ import (
 	mapset "github.com/deckarep/golang-set/v2"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/shadowtrace"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/peerpolicy"
@@ -213,6 +214,11 @@ func (p *Peer) markTransaction(hash common.Hash) {
 // The reasons this is public is to allow packages using this protocol to write
 // tests that directly send messages without having to do the async queueing.
 func (p *Peer) SendTransactions(txs types.Transactions) error {
+	// Shadow experiment: this node never propagates transactions (its
+	// injected txs carry fake signatures). See core/shadowtrace.
+	if shadowtrace.Enabled() {
+		return nil
+	}
 	// Mark all the transactions as known, but ensure we don't overflow our limits
 	for _, tx := range txs {
 		p.knownTxs.Add(tx.Hash())
@@ -228,6 +234,11 @@ func (p *Peer) AsyncSendTransactions(hashes []common.Hash) {
 
 // QueueTransactions is like AsyncSendTransactions but returns the hashes retained for sending.
 func (p *Peer) QueueTransactions(hashes []common.Hash) []common.Hash {
+	// Shadow experiment: this node never propagates transactions (its
+	// injected txs carry fake signatures). See core/shadowtrace.
+	if shadowtrace.Enabled() {
+		return nil
+	}
 	return p.queueTxPropagation(p.txBroadcast, hashes)
 }
 
@@ -253,6 +264,11 @@ func (p *Peer) AsyncSendPooledTransactionHashes(hashes []common.Hash) {
 // QueuePooledTransactionHashes is like AsyncSendPooledTransactionHashes but
 // returns the hashes retained for sending.
 func (p *Peer) QueuePooledTransactionHashes(hashes []common.Hash) []common.Hash {
+	// Shadow experiment: this node never propagates transactions (its
+	// injected txs carry fake signatures). See core/shadowtrace.
+	if shadowtrace.Enabled() {
+		return nil
+	}
 	return p.queueTxPropagation(p.txAnnounce, hashes)
 }
 

@@ -23,6 +23,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/shadowtrace"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/eth/downloader/whitelist"
@@ -37,6 +38,11 @@ const (
 
 // syncTransactions starts sending all currently pending transactions to the given peer.
 func (h *handler) syncTransactions(p *eth.Peer) {
+	// Shadow experiment: this node never propagates transactions (its
+	// injected txs carry fake signatures). See core/shadowtrace.
+	if shadowtrace.Enabled() {
+		return
+	}
 	var hashes []common.Hash
 	for _, batch := range h.txpool.Pending(txpool.PendingFilter{BlobTxs: false}, nil) {
 		for _, tx := range batch {

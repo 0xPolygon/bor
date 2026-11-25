@@ -18,11 +18,13 @@ package core
 
 import (
 	"bytes"
+	"errors"
 	"runtime"
 	"sync"
 	"sync/atomic"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/shadowtrace"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -182,6 +184,7 @@ func (s *streamCtx) runWorker() {
 			return
 		}
 		if s.evmAbort != nil && s.evmAbort.Load() {
+			shadowtrace.Dropped(s.header.Number.Uint64(), tx.Hash(), shadowtrace.DropAbortSkip)
 			continue
 		}
 		s.processTx(tx)
@@ -190,10 +193,21 @@ func (s *streamCtx) runWorker() {
 
 func (s *streamCtx) processTx(tx *types.Transaction) {
 	idx := int(s.txIndex.Add(1) - 1)
-	gasUsed, ok := s.p.prefetchOneTx(
+	number := s.header.Number.Uint64()
+	shadowtrace.RunStart(number, tx.Hash())
+	gasUsed, ok, outcome := s.p.prefetchOneTxOutcome(
 		tx, idx, s.header, s.statedb, s.reader, s.signer, s.cfg,
 		s.intermediateRootPrefetch, s.evmInterrupt, &s.fails,
 	)
+	// Gap 8 (shadow experiment only): an interrupted run completed
+	// ApplyMessage without error, so it would be recorded as prefetched
+	// although its state is only partly warm. With the toggle on it counts
+	// as a failure and stays eligible for a later prefetch.
+	if ok && outcome == shadowtrace.OutcomeInterrupted && shadowtrace.Gap8Fix() {
+		s.fails.Add(1)
+		ok = false
+	}
+	shadowtrace.RunEnd(number, tx.Hash(), outcome, gasUsed, ok)
 	if !ok {
 		return
 	}
@@ -207,9 +221,7 @@ func (s *streamCtx) processTx(tx *types.Transaction) {
 }
 
 // prefetchOneTx executes a single transaction on a copy of statedb to warm caches.
-// Shared worker body used by both Prefetch (block-oriented) and PrefetchStream
-// (streaming). Returns the execution gas used and a success flag. On any EVM
-// interrupt or unrecoverable error it returns (0, false) and increments fails.
+// See prefetchOneTxOutcome; this form drops the run outcome.
 func (p *StatePrefetcher) prefetchOneTx(
 	tx *types.Transaction,
 	txIdx int,
@@ -222,18 +234,40 @@ func (p *StatePrefetcher) prefetchOneTx(
 	interrupt *atomic.Bool,
 	fails *atomic.Int64,
 ) (uint64, bool) {
+	gas, ok, _ := p.prefetchOneTxOutcome(tx, txIdx, header, statedb, reader, signer, cfg,
+		intermediateRootPrefetch, interrupt, fails)
+
+	return gas, ok
+}
+
+// prefetchOneTxOutcome executes a single transaction on a copy of statedb to warm caches.
+// Shared worker body used by both Prefetch (block-oriented) and PrefetchStream
+// (streaming). Returns the execution gas used and a success flag. On any EVM
+// interrupt or unrecoverable error it returns (0, false) and increments fails.
+func (p *StatePrefetcher) prefetchOneTxOutcome(
+	tx *types.Transaction,
+	txIdx int,
+	header *types.Header,
+	statedb *state.StateDB,
+	reader state.Reader,
+	signer types.Signer,
+	cfg vm.Config,
+	intermediateRootPrefetch bool,
+	interrupt *atomic.Bool,
+	fails *atomic.Int64,
+) (uint64, bool, string) {
 	if interrupt != nil && interrupt.Load() {
 		// Match every other failure path in this function — the docstring
 		// promises fails is incremented on every (0,false) return so the
 		// {valid,invalid} meters add up to the txIndex without double-counting.
 		fails.Add(1)
-		return 0, false
+		return 0, false, shadowtrace.OutcomePreAborted
 	}
 
 	sender, err := preloadReaderForTx(reader, tx, signer)
 	if err != nil {
 		fails.Add(1)
-		return 0, false
+		return 0, false, shadowtrace.OutcomeError
 	}
 	_ = sender // sender is pre-cached via reader.Account
 
@@ -241,7 +275,7 @@ func (p *StatePrefetcher) prefetchOneTx(
 	msg, err := TransactionToMessage(tx, signer, header.BaseFee)
 	if err != nil {
 		fails.Add(1)
-		return 0, false
+		return 0, false, shadowtrace.OutcomeError
 	}
 	msg.SkipNonceChecks = true // stream order may diverge from nonce order
 	stateCpy.SetTxContext(tx.Hash(), txIdx)
@@ -252,12 +286,19 @@ func (p *StatePrefetcher) prefetchOneTx(
 	result, err := ApplyMessage(evm, msg, new(GasPool).AddGas(header.GasLimit))
 	if err != nil {
 		fails.Add(1)
-		return 0, false
+		return 0, false, shadowtrace.OutcomeError
 	}
 	if intermediateRootPrefetch {
 		stateCpy.IntermediateRoot(true)
 	}
-	return result.UsedGas, true
+	outcome := shadowtrace.OutcomeCompleted
+	switch {
+	case errors.Is(result.Err, vm.ErrInterrupt):
+		outcome = shadowtrace.OutcomeInterrupted
+	case result.Failed():
+		outcome = shadowtrace.OutcomeReverted
+	}
+	return result.UsedGas, true, outcome
 }
 
 // resolveEvmInterrupt picks the atomic flag wired into the EVM interrupt for the

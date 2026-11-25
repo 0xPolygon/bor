@@ -36,6 +36,7 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/forkid"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/shadowtrace"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/txpool"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -945,6 +946,11 @@ func (h *handler) BroadcastTransactions(txs types.Transactions) {
 }
 
 func (h *handler) broadcastTransactions(txs types.Transactions, onBroadcast func([]common.Hash)) bool {
+	// Shadow experiment: this node never propagates transactions (its
+	// injected txs carry fake signatures). See core/shadowtrace.
+	if shadowtrace.Enabled() {
+		return false
+	}
 	var (
 		blobTxs        int // Number of blob transactions to announce only
 		largeTxs       int // Number of large transactions to announce only
@@ -1117,6 +1123,11 @@ func (h *handler) stuckTxBroadcastLoop() {
 }
 
 func (h *handler) rebroadcastStuckTransactions(txs types.Transactions, onBroadcast func([]common.Hash)) bool {
+	// Shadow experiment: this node never propagates transactions (its
+	// injected txs carry fake signatures). See core/shadowtrace.
+	if shadowtrace.Enabled() {
+		return false
+	}
 	if !h.canRebroadcast() {
 		return false
 	}

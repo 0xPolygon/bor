@@ -26,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
+	"github.com/ethereum/go-ethereum/core/shadowtrace"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
@@ -732,6 +733,10 @@ func answerGetPooledTransactions(backend Backend, query GetPooledTransactionsReq
 		// Retrieve the requested transaction, skipping if unknown to us
 		encoded := backend.TxPool().GetRLP(hash)
 		if len(encoded) == 0 {
+			continue
+		}
+		// Shadow experiment: never serve an injected (fake-signature) tx.
+		if shadowtrace.IsInjected(hash) {
 			continue
 		}
 		hashes = append(hashes, hash)

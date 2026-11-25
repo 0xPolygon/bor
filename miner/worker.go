@@ -37,6 +37,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/consensus/misc/eip4844"
 	"github.com/ethereum/go-ethereum/core"
+	"github.com/ethereum/go-ethereum/core/shadowtrace"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/stateless"
 	"github.com/ethereum/go-ethereum/core/txpool"
@@ -1370,6 +1371,7 @@ func (w *worker) taskLoop() {
 				switch err.(type) {
 				case *bor.UnauthorizedSignerError:
 					log.Debug("Block sealing skipped (not in validator set)", "err", err)
+					shadowtrace.SealSkipped(task.block.NumberU64(), err)
 				default:
 					log.Warn("Block sealing failed", "err", err)
 				}
@@ -1919,8 +1921,15 @@ mainloop:
 
 		// Capture gas pool before execution so we can compute freed gas afterwards.
 		gasPoolBefore := env.gasPool.Gas()
+		var shadowStats state.ReaderStats
+		if shadowtrace.Enabled() && env.processReader != nil {
+			shadowStats = env.processReader.GetStats()
+		}
 		logs, err := w.commitTransaction(env, tx)
 		txDuration := time.Since(lastCommitStart)
+		if shadowtrace.Enabled() && env.prefetchedTxHashes != nil {
+			w.shadowApplied(env, tx, lastCommitStart, txDuration, shadowStats, err)
+		}
 
 		// Set mock delay (if any) between transactions for tests
 		time.Sleep(time.Duration(w.mockTxDelay) * time.Millisecond)
@@ -2283,6 +2292,7 @@ func sendPlan(builderPlanCh chan<- *types.Transaction, genParams *generateParams
 	// Clone is O(N) pointer copies — done synchronously before the heap is consumed.
 	clone := plainTxs.clone()
 	prefetchedHashes := genParams.prefetchedTxHashes
+	shadowNumber := shadowtrace.Current()
 	genParams.planWg.Add(1)
 	go func() {
 		defer genParams.planWg.Done()
@@ -2296,6 +2306,7 @@ func sendPlan(builderPlanCh chan<- *types.Transaction, genParams *generateParams
 			select {
 			case builderPlanCh <- tx:
 			default:
+				shadowtrace.Dropped(shadowNumber, tx.Hash(), shadowtrace.DropPlanChanFull)
 			}
 		}
 	}()
@@ -2361,6 +2372,8 @@ func scanOverflow(
 //
 //nolint:gocognit
 func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment, genParams *generateParams) error {
+	shadowPassStart(env, genParams)
+
 	if w.interruptBlockBuilding.Load() {
 		return nil
 	}
@@ -2602,6 +2615,8 @@ func (w *worker) buildAttempt(interrupt *atomic.Int32, noempty bool, timestamp i
 		production:         true,
 	}
 
+	shadowtrace.BuildStart(parent.Number.Uint64()+1, buildStart, parent.GetActualTime(), time.Time{})
+
 	var interruptPrefetch atomic.Bool
 	w.maybeStartPrefetch(parent, throwaway, &genParams, &interruptPrefetch)
 	w.buildAndCommitBlock(interrupt, noempty, &genParams, &interruptPrefetch)
@@ -2685,11 +2700,20 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 	// CPU on throwaway EVM work while the block build is already aborted.
 	defer interruptPrefetch.Store(true)
 
+	shadowNumber, shadowOutcome := uint64(0), "prepare-failed"
+	if genParams.production && genParams.parentHash != (common.Hash{}) {
+		if parent := w.chain.GetHeaderByHash(genParams.parentHash); parent != nil {
+			shadowNumber = parent.Number.Uint64() + 1
+		}
+	}
+	defer func() { shadowtrace.BuildEnd(shadowNumber, shadowOutcome) }()
+
 	prepareWorkStart := time.Now()
 	work, err := w.prepareWork(genParams, w.makeWitness)
 	if err != nil {
 		return
 	}
+	shadowtrace.HeaderReady(shadowNumber, work.header.GetActualTime())
 	prepareWorkDuration := time.Since(prepareWorkStart)
 	prepareWorkTimer.Update(prepareWorkDuration)
 
@@ -2709,6 +2733,7 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 		genParams.builderPlanCh = make(chan *types.Transaction, prefetchChanBufSize)
 		genParams.builderGasFreedCh = make(chan uint64, 256)
 		genParams.builderStarted.Store(true) // immediately interrupts idle Prefetch() + mode switch
+		shadowtrace.BuilderStart(shadowNumber)
 	}
 
 	stopFn := func() {}
@@ -2753,6 +2778,7 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 	// Fill pending transactions from the txpool into the block: a single
 	// snapshot, or repeated ones until announce time when sequencing.
 	err = w.fillBlock(interrupt, work, genParams)
+	shadowtrace.FillEnd(shadowNumber)
 	// Wait for any sendPlan goroutines to finish before closing the channel.
 	// These goroutines do only non-blocking sends so they complete in microseconds.
 	// Waiting here ensures no goroutine sends to a closed channel.
@@ -2793,6 +2819,7 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 		// totally. Committing the interrupted block introduces unnecessary
 		// delay, and possibly causes miner to mine on the previous head,
 		// which could result in higher uncle rate.
+		shadowOutcome = "discarded-newhead"
 		work.discard()
 		return
 
@@ -2802,16 +2829,22 @@ func (w *worker) buildAndCommitBlock(interrupt *atomic.Int32, noempty bool, genP
 		// consumers already saw. Discard; the next work cycle's build-start
 		// read adopts their window.
 		log.Warn("Discarding build to follow the store's sequence", "number", work.header.Number)
+		shadowOutcome = "discarded-resequence"
 		work.discard()
 
 		return
 	}
 	if !w.sealBarrier(work) {
+		shadowOutcome = "seal-barrier-refused"
 		work.discard()
 
 		return
 	}
 
+	shadowOutcome = "submitted"
+	if err != nil {
+		shadowOutcome = "submitted-" + err.Error()
+	}
 	w.submitForSealing(work, start, genParams)
 
 	// Swap out the old work with the new one, terminating any leftover
@@ -2973,6 +3006,8 @@ func (w *worker) runPrefetcher(parent *types.Header, throwaway *state.StateDB, g
 		return
 	}
 
+	shadowtrace.IdleStart(header.Number.Uint64())
+
 	prefetcher := core.NewStatePrefetcher(w.chainConfig, w.chain.HeaderChain())
 	txsCh := make(chan *types.Transaction, prefetchChanBufSize)
 	evmAbort := new(atomic.Bool)
@@ -3042,8 +3077,9 @@ func (w *worker) runPrefetcher(parent *types.Header, throwaway *state.StateDB, g
 		// and move on. Workers that pick up a drained-but-not-gone tx see evmAbort=true
 		// and skip it.
 		evmAbort.Store(true)
-		drainTxChan(txsCh)
+		drainTxChanTraced(txsCh, header.Number.Uint64())
 		evmAbort.Store(false)
+		shadowtrace.Handoff(header.Number.Uint64())
 		// Flip phase attribution only after the handoff is complete. From here
 		// on, every successful prefetch is genuinely builder-phase work.
 		inBuilderPhase.Store(true)
@@ -3056,6 +3092,23 @@ func (w *worker) runPrefetcher(parent *types.Header, throwaway *state.StateDB, g
 	// ordered with the close rather than after the wrapping goroutine's recover.
 	shutdown()
 	<-streamDone
+}
+
+// drainTxChanTraced is drainTxChan that records each drained tx in the
+// shadow trace (a no-op outside the shadow experiment).
+func drainTxChanTraced(ch <-chan *types.Transaction, number uint64) {
+	if !shadowtrace.Enabled() {
+		drainTxChan(ch)
+		return
+	}
+	for {
+		select {
+		case tx := <-ch:
+			shadowtrace.Dropped(number, tx.Hash(), shadowtrace.DropHandoffDrain)
+		default:
+			return
+		}
+	}
 }
 
 // drainTxChan removes all currently-buffered entries from the channel without blocking.
@@ -3152,9 +3205,11 @@ func (w *worker) streamIdleBatch(
 			localPrefetched[ltx.Hash] = struct{}{}
 			gaspool.SubGas(ltx.Gas)
 			totalGasPool.SubGas(ltx.Gas)
+			shadowtrace.Sent(shadowtrace.Current(), ltx.Hash, "idle")
 		default:
 			// Channel full — stop this batch. The tx we failed to send will
 			// reappear in the next iteration's pool snapshot.
+			shadowtrace.Dropped(shadowtrace.Current(), ltx.Hash, shadowtrace.DropIdleChanFull)
 			return
 		}
 		txs.Shift()
@@ -3175,6 +3230,7 @@ func nextViableIdleTx(
 			return nil, nil
 		}
 		if gaspool.Gas() < ltx.Gas {
+			shadowtrace.Dropped(shadowtrace.Current(), ltx.Hash, shadowtrace.DropIdleBudget)
 			txs.Pop()
 			continue
 		}
@@ -3243,6 +3299,7 @@ func (w *worker) runBuilderTxProvider(txsCh chan<- *types.Transaction, header *t
 		)
 		gasFreedCh = newGasFreedCh
 		extendedBudget += delta
+		planLen := len(batch)
 
 		if extendedBudget > 0 {
 			// Mark the plan batch as in-flight before the overflow scan so
@@ -3256,7 +3313,7 @@ func (w *worker) runBuilderTxProvider(txsCh chan<- *types.Transaction, header *t
 			batch = append(batch, bonus...)
 		}
 
-		forwardTxs(txsCh, batch, inFlightHashes)
+		forwardTxsTraced(txsCh, batch, inFlightHashes, header.Number.Uint64(), planLen)
 
 		if builderDone || interrupt.Load() {
 			return
@@ -3268,13 +3325,25 @@ func (w *worker) runBuilderTxProvider(txsCh chan<- *types.Transaction, header *t
 // buffer is full — prefetch is best-effort. Tracks each forwarded hash in
 // inFlightHashes so follow-up overflow scans don't re-emit in-flight txs.
 func forwardTxs(ch chan<- *types.Transaction, txs []*types.Transaction, inFlightHashes map[common.Hash]struct{}) {
-	for _, tx := range txs {
+	forwardTxsTraced(ch, txs, inFlightHashes, 0, len(txs))
+}
+
+// forwardTxsTraced is forwardTxs that labels the first planLen txs as plan
+// and the rest as overflow in the shadow trace of build number.
+func forwardTxsTraced(ch chan<- *types.Transaction, txs []*types.Transaction, inFlightHashes map[common.Hash]struct{}, number uint64, planLen int) {
+	for i, tx := range txs {
 		select {
 		case ch <- tx:
 			if inFlightHashes != nil {
 				inFlightHashes[tx.Hash()] = struct{}{}
 			}
+			src := "plan"
+			if i >= planLen {
+				src = "overflow"
+			}
+			shadowtrace.Sent(number, tx.Hash(), src)
 		default:
+			shadowtrace.Dropped(number, tx.Hash(), shadowtrace.DropFwdChanFull)
 		}
 	}
 }

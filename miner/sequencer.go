@@ -21,6 +21,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ethereum/go-ethereum/core/shadowtrace"
+
 	"github.com/ethereum/go-ethereum/consensus/bor"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/log"
@@ -147,12 +149,28 @@ func (w *worker) sequencerMutedBuild(genParams *generateParams, header *types.He
 		return false
 	}
 
+	// Shadow experiment: run the real continuous fill loop although the
+	// signer is not authorized. Only reachable with the local, network-free
+	// ShadowSequencer attached (eth/backend refuses shadow mode with store
+	// endpoints configured); Seal still refuses the block.
 	engine, ok := w.engine.(*bor.Bor)
 	if !ok {
 		return false
 	}
 
-	return !engine.IsAuthorizedSigner(w.chain, header)
+	authorized := engine.IsAuthorizedSigner(w.chain, header)
+
+	if shadowtrace.Enabled() {
+		// A shadow node signing as a real producer would seal and broadcast
+		// its blocks. Never continue in that state.
+		if authorized {
+			log.Crit("SHADOW mode with an authorized signer: refusing to run", "number", header.Number)
+		}
+
+		return false
+	}
+
+	return !authorized
 }
 
 func (w *worker) applyAdoption(genParams *generateParams, header *types.Header) {
