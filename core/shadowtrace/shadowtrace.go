@@ -146,9 +146,13 @@ func IsInjected(hash common.Hash) bool {
 func pruneLoop() {
 	for range time.Tick(time.Minute) {
 		cutoff := time.Now().Add(-30 * time.Minute)
+		// Injected txs are one-shot (retired after their build); keep their
+		// mark much longer so a late peer request is still refused.
+		injCutoff := time.Now().Add(-6 * time.Hour)
 
 		seen.Range(func(k, v any) bool {
-			if r := v.(seenRec); !r.injected && r.at.Before(cutoff) {
+			r := v.(seenRec)
+			if (!r.injected && r.at.Before(cutoff)) || (r.injected && r.at.Before(injCutoff)) {
 				seen.Delete(k)
 			}
 

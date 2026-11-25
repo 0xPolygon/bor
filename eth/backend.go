@@ -575,6 +575,11 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		eth.miner.SetPrioAddresses(config.TxPool.Locals)
 	}
 
+	// Shadow mode is validated before any sequencer client is constructed.
+	if err := validateShadow(stack, config); err != nil {
+		return nil, err
+	}
+
 	if err := eth.attachSequencer(config); err != nil {
 		return nil, err
 	}

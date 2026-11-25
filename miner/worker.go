@@ -1335,6 +1335,12 @@ func (w *worker) taskLoop() {
 			if w.newTaskHook != nil {
 				w.newTaskHook(task)
 			}
+			// Shadow experiment: never seal. The block is dropped before
+			// the engine sees it, independent of fork gates or signer.
+			if shadowtrace.Enabled() {
+				shadowtrace.SealSkipped(task.block.NumberU64(), errShadowNoSeal)
+				continue
+			}
 			// Reject duplicate sealing work due to resubmitting.
 			sealHash := w.engine.SealHash(task.block.Header())
 			if sealHash == prev {
@@ -1402,6 +1408,12 @@ func (w *worker) resultLoop() {
 			block := newSealedBlockEvent.Block
 			witness := newSealedBlockEvent.Witness
 			if block == nil {
+				continue
+			}
+			// Shadow experiment: a sealed result must never be written or
+			// broadcast (second guard; taskLoop never seals in shadow mode).
+			if shadowtrace.Enabled() {
+				log.Error("SHADOW dropped an unexpected sealed block", "number", block.NumberU64())
 				continue
 			}
 

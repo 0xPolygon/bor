@@ -5,6 +5,7 @@ package miner
 // process runs with BOR_SHADOW_LLS=1 (shadowtrace.Enabled()).
 
 import (
+	"errors"
 	"math/big"
 	"time"
 
@@ -13,6 +14,10 @@ import (
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 )
+
+// errShadowNoSeal is the reason logged for every shadow block: shadow mode
+// never hands a block to the consensus engine's Seal.
+var errShadowNoSeal = errors.New("shadow mode: sealing disabled")
 
 // shadowApplied records one builder apply in the shadow trace, with the
 // L1 (per-build reader cache) hit/miss delta of exactly this tx: the builder

@@ -9,3 +9,6 @@ import (
 
 // attachShadow is a no-op outside -tags lls_shadow builds.
 func (s *Ethereum) attachShadow(*node.Node, *ethconfig.Config) error { return nil }
+
+// validateShadow is a no-op outside -tags lls_shadow builds.
+func validateShadow(*node.Node, *ethconfig.Config) error { return nil }

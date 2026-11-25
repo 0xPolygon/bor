@@ -35,14 +35,36 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 )
 
-// attachShadow switches the node into shadow-producer mode when enabled.
-func (s *Ethereum) attachShadow(stack *node.Node, config *ethconfig.Config) error {
+// validateShadow runs before any sequencer client is built: shadow mode
+// refuses a configured sequence store, and RPC reachable from outside the box
+// (injected fake-signature txs are visible to pending-tx RPCs).
+func validateShadow(stack *node.Node, config *ethconfig.Config) error {
 	if !shadowtrace.Enabled() {
 		return nil
 	}
 
 	if config.SequencerRole != "" || config.SequencerPublisherEndpoint != "" || config.SequencerConsumerEndpoint != "" {
 		return errors.New("shadow mode refuses to run with a sequencer role or endpoint configured")
+	}
+
+	nc := stack.Config()
+	for name, host := range map[string]string{"http": nc.HTTPHost, "ws": nc.WSHost} {
+		if host != "" && host != "127.0.0.1" && host != "localhost" && host != "::1" {
+			return fmt.Errorf("shadow mode needs %s RPC on loopback only, got %q", name, host)
+		}
+	}
+
+	return nil
+}
+
+// attachShadow switches the node into shadow-producer mode when enabled.
+func (s *Ethereum) attachShadow(stack *node.Node, config *ethconfig.Config) error {
+	if !shadowtrace.Enabled() {
+		return nil
+	}
+
+	if err := validateShadow(stack, config); err != nil {
+		return err
 	}
 
 	if s.miner == nil {
@@ -106,6 +128,7 @@ type ShadowAPI struct {
 	mu       sync.Mutex
 	injected map[common.Hash]*injected
 	pending  []scheduled // replays waiting for the next build start
+	gen      uint64      // bumped by Clear; timers of an older gen do nothing
 }
 
 type scheduled struct {
@@ -188,6 +211,7 @@ func (a *ShadowAPI) Clear() int {
 	}
 	a.injected = map[common.Hash]*injected{}
 	a.pending = nil
+	a.gen++
 	a.mu.Unlock()
 
 	n := 0
@@ -222,6 +246,7 @@ func (a *ShadowAPI) onBuildStart(number uint64, start time.Time) {
 	}
 	batch := a.pending
 	a.pending = nil
+	gen := a.gen
 	a.mu.Unlock()
 
 	for _, sc := range batch {
@@ -229,6 +254,14 @@ func (a *ShadowAPI) onBuildStart(number uint64, start time.Time) {
 		delay := time.Until(start.Add(sc.offset))
 
 		time.AfterFunc(max(delay, 0), func() {
+			a.mu.Lock()
+			stale := a.gen != gen
+			a.mu.Unlock()
+
+			if stale {
+				return
+			}
+
 			h, err := a.inject(sc.args, number)
 			if err != nil {
 				log.Info("SHADOW inject failed", "number", number, "orig", sc.hash, "err", err)
@@ -320,19 +353,18 @@ func (a *ShadowAPI) inject(args *ShadowInjectArgs, target uint64) (common.Hash, 
 		return common.Hash{}, errors.New("pool and miner signers differ; sender cache would miss")
 	}
 
+	// Mark before the pool sees it, so it can never be served to a peer.
 	shadowtrace.MarkInjected(tx.Hash(), time.Now())
 
+	if errs := a.eth.txPool.Add([]*types.Transaction{tx}, true); len(errs) > 0 && errs[0] != nil {
+		return common.Hash{}, errs[0]
+	}
+
+	// Register after admission: if its build already ended, the next
+	// onBuildEnd retires it (target <= number), so nothing is left behind.
 	a.mu.Lock()
 	a.injected[tx.Hash()] = &injected{target: target, oneShot: !args.Keep}
 	a.mu.Unlock()
-
-	if errs := a.eth.txPool.Add([]*types.Transaction{tx}, true); len(errs) > 0 && errs[0] != nil {
-		a.mu.Lock()
-		delete(a.injected, tx.Hash())
-		a.mu.Unlock()
-
-		return common.Hash{}, errs[0]
-	}
 
 	return tx.Hash(), nil
 }
