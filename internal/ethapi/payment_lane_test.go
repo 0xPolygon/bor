@@ -292,6 +292,22 @@ func TestPaymentLaneQuoteErrors(t *testing.T) {
 	_, err = NewBorAPI(nilStateBackend{backend}).PaymentLaneQuote(context.Background(), TransactionArgs{From: &sender, To: &sender})
 	require.EqualError(t, err, "latest state unavailable")
 
+	// A call the next block could not even start (value above the balance)
+	// fails before execution.
+	_, err = NewBorAPI(backend).PaymentLaneQuote(context.Background(), TransactionArgs{From: &sender, To: &sender, Value: (*hexutil.Big)(big.NewInt(2e18))})
+	require.ErrorContains(t, err, "insufficient funds")
+
+	// Fee fields a transaction could not carry are refused, as on submission.
+	one, two := (*hexutil.Big)(big.NewInt(1)), (*hexutil.Big)(big.NewInt(2))
+	_, err = NewBorAPI(backend).PaymentLaneQuote(context.Background(), TransactionArgs{From: &sender, To: &sender, GasPrice: one, MaxFeePerGas: two})
+	require.EqualError(t, err, "both gasPrice and (maxFeePerGas or maxPriorityFeePerGas) specified")
+	_, err = NewBorAPI(backend).PaymentLaneQuote(context.Background(), TransactionArgs{From: &sender, To: &sender, GasPrice: one, MaxPriorityFeePerGas: one})
+	require.EqualError(t, err, "both gasPrice and (maxFeePerGas or maxPriorityFeePerGas) specified")
+	_, err = NewBorAPI(backend).PaymentLaneQuote(context.Background(), TransactionArgs{From: &sender, To: &sender, MaxFeePerGas: one, MaxPriorityFeePerGas: two})
+	require.EqualError(t, err, "maxFeePerGas (0x1) < maxPriorityFeePerGas (0x2)")
+	_, err = NewBorAPI(backend).PaymentLaneQuote(context.Background(), TransactionArgs{From: &sender, To: &sender, MaxFeePerGas: two, MaxPriorityFeePerGas: two})
+	require.NoError(t, err)
+
 	_, err = NewBorAPI(noTipBackend{backend}).PaymentLaneQuote(context.Background(), TransactionArgs{From: &sender, To: &sender})
 	require.EqualError(t, err, "no tip suggestion")
 

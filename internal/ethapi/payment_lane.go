@@ -52,6 +52,10 @@ func addPaymentLaneFields(fields map[string]interface{}, receipt *types.Receipt)
 // In the response, discount is that signer refund and fee is the nominal fee
 // minus it.
 func (api *BorAPI) PaymentLaneQuote(ctx context.Context, args TransactionArgs) (map[string]interface{}, error) {
+	if err := checkQuoteFees(args); err != nil {
+		return nil, err
+	}
+
 	header, err := api.b.HeaderByNumber(ctx, rpc.LatestBlockNumber)
 	if err != nil {
 		return nil, fmt.Errorf("latest header unavailable: %w", err)
@@ -162,6 +166,20 @@ func nextBlockLane(cfg *params.ChainConfig, header *types.Header) (*params.Payme
 
 // quoteTip is the per-gas tip the quote assumes: the caller's, bounded by its
 // fee cap, or the node's suggestion.
+// checkQuoteFees refuses fee fields no transaction could carry, as
+// submission would: the simulation runs without them, so nothing else would.
+func checkQuoteFees(args TransactionArgs) error {
+	if args.GasPrice != nil && (args.MaxFeePerGas != nil || args.MaxPriorityFeePerGas != nil) {
+		return errors.New("both gasPrice and (maxFeePerGas or maxPriorityFeePerGas) specified")
+	}
+
+	if args.MaxFeePerGas != nil && args.MaxPriorityFeePerGas != nil && args.MaxFeePerGas.ToInt().Cmp(args.MaxPriorityFeePerGas.ToInt()) < 0 {
+		return fmt.Errorf("maxFeePerGas (%v) < maxPriorityFeePerGas (%v)", args.MaxFeePerGas, args.MaxPriorityFeePerGas)
+	}
+
+	return nil
+}
+
 func (api *BorAPI) quoteTip(ctx context.Context, args TransactionArgs, baseFee *big.Int) (*big.Int, error) {
 	var tip *big.Int
 
