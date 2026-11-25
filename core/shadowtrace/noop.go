@@ -60,3 +60,6 @@ func HeavySeen(common.Hash, time.Time, uint64, string, string, string) string {
 func WarmStart(common.Hash) time.Time                                       { return time.Time{} }
 func WarmEnd(common.Hash, time.Time, uint64, string, uint64, time.Duration) {}
 func HeadSeen(uint64, time.Time, []common.Hash, uint64, int)                {}
+func WarmSecond(common.Hash, uint64, string, uint64, time.Duration, time.Duration,
+	string, uint64, time.Duration, time.Duration) {
+}

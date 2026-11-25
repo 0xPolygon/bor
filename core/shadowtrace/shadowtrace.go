@@ -297,6 +297,22 @@ func WarmEnd(hash common.Hash, start time.Time, head uint64, outcome string, gas
 		"buildNumber", Current(), "endSinceBuildStartMs", ms(now, currentStart()))
 }
 
+// WarmSecond logs the double-run result of one arm-A heavy tx: run 1 (cold,
+// = the early warm) and run 2 (fully warm, fresh StateDB, same head state).
+func WarmSecond(hash common.Hash, head uint64,
+	out1 string, gas1 uint64, dur1, reads1 time.Duration,
+	out2 string, gas2 uint64, dur2, reads2 time.Duration,
+) {
+	if !Enabled() {
+		return
+	}
+
+	log.Info("SHADOW double-run", "hash", hash.Hex(), "head", head,
+		"run1Outcome", out1, "run1Gas", gas1, "run1Ms", durMs(dur1), "run1ReadMs", durMs(reads1),
+		"run2Outcome", out2, "run2Gas", gas2, "run2Ms", durMs(dur2), "run2ReadMs", durMs(reads2),
+		"sameGas", gas1 == gas2 && out1 == out2)
+}
+
 // ---------------------------------------------------------------------------
 // Chain heads (import times) — node-wide
 
