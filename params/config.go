@@ -352,6 +352,7 @@ var (
 			HampiBlock:        nil, // unscheduled
 			UburuBlock:        big.NewInt(51978200),
 			SalvadorBlock:     big.NewInt(54310900),
+			PaymentLaneBlock:  nil, // unscheduled
 
 			StateSyncConfirmationDelay: map[string]uint64{
 				"0": 128,
@@ -476,6 +477,7 @@ var (
 			HampiBlock:        nil, // unscheduled
 			UburuBlock:        big.NewInt(96787900),
 			SalvadorBlock:     big.NewInt(98688600),
+			PaymentLaneBlock:  nil, // unscheduled
 
 			StateSyncConfirmationDelay: map[string]uint64{
 				"44934656": 128,
@@ -1043,6 +1045,9 @@ type BorConfig struct {
 	HampiBlock                 *big.Int          `json:"hampiBlock"`                 // Hampi switch block (nil = no fork, 0 = already on hampi)
 	UburuBlock                 *big.Int          `json:"uburuBlock"`                 // Uburu switch block (nil = no fork, 0 = already on uburu)
 	SalvadorBlock              *big.Int          `json:"salvadorBlock"`              // Salvador switch block (nil = no fork, 0 = already on salvador)
+
+	PaymentLaneBlock *big.Int                      `json:"paymentLaneBlock"`      // Payment lane switch block (nil = no fork, 0 = already on payment lane)
+	PaymentLane      map[string]*PaymentLaneConfig `json:"paymentLane,omitempty"` // Payment lane parameters by activation block; one is required at paymentLaneBlock
 }
 
 // String implements the stringer interface, returning the consensus engine details.
@@ -1381,6 +1386,9 @@ func (c *ChainConfig) Description() string {
 		}
 		if c.Bor.SalvadorBlock != nil {
 			banner += fmt.Sprintf(" - Salvador:                    #%-8v\n", c.Bor.SalvadorBlock)
+		}
+		if c.Bor.PaymentLaneBlock != nil {
+			banner += fmt.Sprintf(" - PaymentLane:               #%-8v\n", c.Bor.PaymentLaneBlock)
 		}
 		return banner
 	}
@@ -1727,7 +1735,7 @@ func (c *ChainConfig) CheckConfigForkOrder() error {
 			}
 		}
 	}
-	return nil
+	return c.Bor.checkPaymentLane()
 }
 
 func (bc *BlobConfig) validate() error {
@@ -1834,7 +1842,7 @@ func (c *ChainConfig) checkCompatible(newcfg *ChainConfig, headNumber *big.Int, 
 	if isForkBlockIncompatible(c.OsakaBlock, newcfg.OsakaBlock, headNumber) {
 		return newBlockCompatError("Osaka fork block", c.OsakaBlock, newcfg.OsakaBlock)
 	}
-	return nil
+	return c.checkPaymentLaneCompatible(newcfg, headNumber)
 }
 
 // BaseFeeChangeDenominator bounds the amount the base fee can change between blocks.
@@ -2022,6 +2030,7 @@ type Rules struct {
 	IsLisovoPro                                             bool
 	IsChicago                                               bool
 	IsHampi                                                 bool
+	IsPaymentLane                                           bool
 }
 
 // Rules ensures c's ChainID is not nil.
@@ -2059,5 +2068,6 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, _ uint64) Rules {
 		IsLisovoPro:      c.Bor != nil && c.Bor.IsLisovoPro(num),
 		IsChicago:        c.Bor != nil && c.Bor.IsChicago(num),
 		IsHampi:          c.Bor != nil && c.Bor.IsHampi(num),
+		IsPaymentLane:    c.Bor != nil && c.Bor.IsPaymentLane(num),
 	}
 }

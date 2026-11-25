@@ -200,7 +200,7 @@ func TestSessionAllowsSpeculativeParentCanonicalizedBeforePublish(t *testing.T) 
 			}
 			statedb := s.parked
 			s.parked = nil
-			s.setEnv(newBlockEnv(h.chain, statedb, open, s.sealed))
+			s.setEnv(newBlockEnv(h.chain, statedb, open, s.sealed, nil))
 			s.env.cacheable = false
 			block, payload, ok := preparePending(s.env, s.env.header, common.Hash{}, nil)
 			if !ok {
@@ -477,7 +477,7 @@ func TestBlockEnvCollectsStatelessWitness(t *testing.T) {
 	}
 
 	open := openOn(head, h.config, commitment.Head{0x01})
-	env := newBlockEnv(h.chain, statedb, open.GetBlockOpen(), nil)
+	env := newBlockEnv(h.chain, statedb, open.GetBlockOpen(), nil, nil)
 	witness := env.statedb.Witness()
 	if witness == nil {
 		t.Fatal("stateless self-validation did not attach a witness")
@@ -506,7 +506,7 @@ func TestBlockEnvSpeculativeBlockhash(t *testing.T) {
 		BaseFee:        big.NewInt(params.InitialBaseFee).Bytes(),
 	}
 
-	env := newBlockEnv(h.chain, statedb, open, map[uint64]common.Hash{number + 1: speculativeHash})
+	env := newBlockEnv(h.chain, statedb, open, map[uint64]common.Hash{number + 1: speculativeHash}, nil)
 
 	if got := env.evm.Context.GetHash(number + 1); got != speculativeHash {
 		t.Fatalf("speculative ancestor resolved to %s", got)

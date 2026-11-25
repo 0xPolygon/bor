@@ -3,6 +3,7 @@ package sequencer
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math/big"
 	"testing"
 
@@ -39,7 +40,7 @@ func finalizableEnv(t *testing.T) (*execHarness, *blockEnv, *types.Header) {
 	if err != nil {
 		t.Fatalf("state: %v", err)
 	}
-	env := newBlockEnv(h.chain, statedb, openOn(parent, h.config, commitment.Head{}).GetBlockOpen(), nil)
+	env := newBlockEnv(h.chain, statedb, openOn(parent, h.config, commitment.Head{}).GetBlockOpen(), nil, nil)
 	if _, _, err := env.applyRaw(h.rawTransfer(t, 0)); err != nil {
 		t.Fatalf("apply transaction: %v", err)
 	}
@@ -61,7 +62,7 @@ func TestBlockEnvCanonicalHash(t *testing.T) {
 	if err != nil {
 		t.Fatalf("state: %v", err)
 	}
-	env := newBlockEnv(h.chain, statedb, openOn(parent, h.config, commitment.Head{}).GetBlockOpen(), nil)
+	env := newBlockEnv(h.chain, statedb, openOn(parent, h.config, commitment.Head{}).GetBlockOpen(), nil, nil)
 	if got := env.evm.Context.GetHash(parent.Number.Uint64()); got != parent.Hash() {
 		t.Fatalf("canonical parent hash = %s, want %s", got, parent.Hash())
 	}
@@ -93,7 +94,7 @@ func TestBlockEnvProcessesPragueParentHash(t *testing.T) {
 	}
 
 	open := openOn(parent, &config, commitment.Head{}).GetBlockOpen()
-	env := newBlockEnv(chain, statedb, open, nil)
+	env := newBlockEnv(chain, statedb, open, nil, nil)
 	var key common.Hash
 	binary.BigEndian.PutUint64(key[24:], (open.GetBlockNumber()-1)%params.HistoryServeWindow)
 	if got := env.statedb.GetState(params.HistoryStorageAddress, key); got != parent.Hash() {
@@ -185,6 +186,18 @@ func TestFinalizeSealRejectsUnavailableAndDivergentResults(t *testing.T) {
 		})
 	}
 
+	t.Run("payment lane cap", func(t *testing.T) {
+		h, env, sealed := finalizableEnv(t)
+		lane := params.DefaultPaymentLaneConfig(nil)
+		lane.NonPaymentGasCapPercentage = 65
+		h.chain.Config().Bor.PaymentLaneBlock = common.Big0
+		h.chain.Config().Bor.PaymentLane = map[string]*params.PaymentLaneConfig{"0": lane}
+		env.header.GasUsed, sealed.GasUsed = sealed.GasLimit*66/100, sealed.GasLimit*66/100
+		if _, _, err := env.finalizeSeal(h.chain, sealed); !errors.Is(err, core.ErrNonPaymentGasCap) {
+			t.Fatalf("error = %v, want %v", err, core.ErrNonPaymentGasCap)
+		}
+	})
+
 	t.Run("assembled mismatch", func(t *testing.T) {
 		h, env, sealed := finalizableEnv(t)
 		sealed.Root[0] ^= 0xff
@@ -224,6 +237,28 @@ func TestSealResultFallbackAndMismatch(t *testing.T) {
 			t.Fatal("divergent seal was accepted")
 		}
 	})
+
+	for _, sprint := range []map[string]uint64{nil, {"0": 4}} {
+		t.Run(fmt.Sprintf("payment lane cap, sprint %v", sprint), func(t *testing.T) {
+			h, env, sealed := finalizableEnv(t)
+			if sprint != nil {
+				h.chain.Config().Bor.Sprint = sprint
+			}
+			lane := params.DefaultPaymentLaneConfig(nil)
+			lane.NonPaymentGasCapPercentage = 65
+			h.chain.Config().Bor.PaymentLaneBlock = common.Big0
+			h.chain.Config().Bor.PaymentLane = map[string]*params.PaymentLaneConfig{"0": lane}
+			env.header.GasUsed, sealed.GasUsed = sealed.GasLimit*66/100, sealed.GasLimit*66/100
+			sealed.Root = env.statedb.IntermediateRoot(env.evm.ChainConfig().IsEIP158(env.header.Number))
+			s := &session{consumer: &Consumer{chain: h.chain, index: NewIndex()}, env: env}
+			if err := env.checkSeal(sealed); err != nil {
+				t.Fatalf("fallback seal check: %v", err)
+			}
+			if _, _, _, ok := s.sealResult(sealed); ok {
+				t.Fatal("over-cap seal was accepted")
+			}
+		})
+	}
 
 	t.Run("cache unavailable with body mismatch", func(t *testing.T) {
 		h, env, sealed := finalizableEnv(t)

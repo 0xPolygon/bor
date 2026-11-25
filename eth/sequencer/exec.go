@@ -55,11 +55,13 @@ type blockEnv struct {
 // newBlockEnv builds the execution environment. speculative maps heights of
 // sealed-but-not-yet-imported ancestors to their sealed hashes, so BLOCKHASH
 // resolves them exactly as the producer did — the canonical header walk
-// returns zero for blocks the chain hasn't imported.
-func newBlockEnv(chain *core.BlockChain, statedb *state.StateDB, open *pb.BlockOpen, speculative map[uint64]common.Hash) *blockEnv {
+// returns zero for blocks the chain hasn't imported. parent, when known, is
+// the header the block builds on, which also prices the payment lane: the
+// chain cannot resolve a sealed-but-unimported parent.
+func newBlockEnv(chain *core.BlockChain, statedb *state.StateDB, open *pb.BlockOpen, speculative map[uint64]common.Hash, parent *types.Header) *blockEnv {
 	header := pendingHeader(open)
 
-	blockCtx := core.NewEVMBlockContext(header, chain, nil)
+	blockCtx := core.NewEVMBlockContext(header, openParentChain{chain, parent}, nil)
 
 	walk := blockCtx.GetHash
 	blockCtx.GetHash = func(n uint64) common.Hash {
@@ -99,6 +101,22 @@ func newBlockEnv(chain *core.BlockChain, statedb *state.StateDB, open *pb.BlockO
 	}
 
 	return env
+}
+
+// openParentChain serves the open block's parent even when the chain has not
+// imported it yet, so everything derived from the parent header (the payment
+// lane discount scale) matches what the producer saw.
+type openParentChain struct {
+	*core.BlockChain
+	parent *types.Header
+}
+
+func (c openParentChain) GetHeader(hash common.Hash, number uint64) *types.Header {
+	if c.parent != nil && c.parent.Number.Uint64() == number && c.parent.Hash() == hash {
+		return c.parent
+	}
+
+	return c.BlockChain.GetHeader(hash, number)
 }
 
 // applyRaw executes one streamed raw transaction. The producer only publishes
@@ -350,6 +368,11 @@ func (env *blockEnv) finalizeVerifiedSeal(chain *core.BlockChain, sealed *types.
 	if assembled.Hash() != sealed.Hash() || assembled.TxHash() != sealed.TxHash || assembled.Root() != sealed.Root || assembled.ReceiptHash() != sealed.ReceiptHash || assembled.Bloom() != sealed.Bloom || assembled.GasUsed() != sealed.GasUsed {
 		return nil, nil, fmt.Errorf("%w: finalized result mismatch at block %s", errSealMismatch, sealed.Number)
 	}
+	// Matching roots don't make the block valid: import also checks the
+	// payment lane cap, so a block that breaks it must not be built on.
+	if err := core.ValidatePaymentLaneCapacity(chain.Config(), assembled.Header(), receipts); err != nil {
+		return nil, nil, err
+	}
 	logs := make([]*types.Log, 0)
 	for _, receipt := range receipts {
 		logs = append(logs, receipt.Logs...)
@@ -563,11 +586,9 @@ func (s *session) sealResult(sealed *types.Header) (*types.Block, *ReusableExecu
 				s.deferToCanonical = true
 				return nil, nil, false, false
 			}
-			s.skip(s.env.header.Number.Uint64(), "sealed header verification deferred and finalization failed", "err", err)
-			return nil, nil, false, false
+			return s.skipSeal("sealed header verification deferred and finalization failed", err)
 		}
-		s.skip(s.env.header.Number.Uint64(), "sealed header verification failed", "err", err)
-		return nil, nil, false, false
+		return s.skipSeal("sealed header verification failed", err)
 	}
 	assembled, reusable, err := s.env.finalizeVerifiedSeal(s.consumer.chain, sealed)
 	if err == nil {
@@ -596,7 +617,16 @@ func (s *session) sealResult(sealed *types.Header) (*types.Block, *ReusableExecu
 	if err != nil || assembled.Hash() != sealed.Hash() {
 		return fail("sealed block body mismatch", err)
 	}
+	// Final even at a sprint start: state-sync txs add no GasUsed and no lane log.
+	if capErr := core.ValidatePaymentLaneCapacity(s.consumer.chain.Config(), sealed, s.env.receipts); capErr != nil {
+		return s.skipSeal("sealed block breaks the payment lane cap", capErr)
+	}
 	return assembled, nil, true, true
+}
+
+func (s *session) skipSeal(reason string, cause error) (*types.Block, *ReusableExecution, bool, bool) {
+	s.skip(s.env.header.Number.Uint64(), reason, "err", cause)
+	return nil, nil, false, false
 }
 
 func bigEqual(a, b *big.Int) bool {

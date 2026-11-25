@@ -363,7 +363,9 @@ func borForkIDForks(bor *params.BorConfig) []uint64 {
 		}
 	}
 
-	return forks
+	// A payment lane retune changes consensus at its own block without a
+	// *Block field of its own.
+	return append(forks, bor.PaymentLaneVersionBlocks()...)
 }
 
 // GatherForks gathers all the known forks and creates a sorted list out of them.
@@ -395,11 +397,16 @@ func GatherForks(config *params.ChainConfig, genesisTime uint64) (heightForks []
 			config.Bor.HampiBlock,
 			config.Bor.UburuBlock,
 			config.Bor.SalvadorBlock,
+			config.Bor.PaymentLaneBlock,
 		} {
 			if fork != nil {
 				heightForks = append(heightForks, fork.Uint64())
 			}
 		}
+
+		// Every payment lane parameter version changes consensus, so it is a
+		// fork of its own even without a name.
+		heightForks = append(heightForks, config.Bor.PaymentLaneVersionBlocks()...)
 
 		// Re-sort and deduplicate after adding Bor forks
 		slices.Sort(heightForks)

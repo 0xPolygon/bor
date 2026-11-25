@@ -113,6 +113,19 @@ func ValidateWitnessPreState(witness *Witness, headerReader HeaderReader, expect
 			witnessPreStateRoot, parentHeader.Root, contextHeader.Number.Uint64())
 	}
 
+	return checkWitnessParent(witness, contextHeader)
+}
+
+// checkWitnessParent requires the witness's parent header to be the block's
+// actual parent: stateless execution reads the parent from the witness, not
+// the chain, and needs more of it than the root (e.g. the gas used that gates
+// the payment lane).
+func checkWitnessParent(witness *Witness, contextHeader *types.Header) error {
+	if witnessParent := witness.Headers[0].Hash(); witnessParent != contextHeader.ParentHash {
+		return fmt.Errorf("witness parent header mismatch: witness=%x, parent=%x, blockNumber=%d",
+			witnessParent, contextHeader.ParentHash, contextHeader.Number.Uint64())
+	}
+
 	return nil
 }
 

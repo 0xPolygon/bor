@@ -49,6 +49,7 @@ var mainnetBor = &Chain{
 				HampiBlock:        nil, // unscheduled
 				UburuBlock:        big.NewInt(96787900),
 				SalvadorBlock:     big.NewInt(98688600),
+				PaymentLaneBlock:  nil, // unscheduled
 
 				StateSyncConfirmationDelay: map[string]uint64{
 					"44934656": 128,

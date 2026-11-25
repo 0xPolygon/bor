@@ -867,13 +867,16 @@ func (context *ChainContext) Engine() consensus.Engine {
 }
 
 func (context *ChainContext) GetHeader(hash common.Hash, number uint64) *types.Header {
-	// This method is called to get the hash for a block number when executing the BLOCKHASH
-	// opcode. Hence no need to search for non-canonical blocks.
-	header, err := context.b.HeaderByNumber(context.ctx, rpc.BlockNumber(number))
-	if err != nil || header.Hash() != hash {
-		return nil
+	if header, err := context.b.HeaderByNumber(context.ctx, rpc.BlockNumber(number)); err == nil && header != nil && header.Hash() == hash {
+		return header
 	}
-	return header
+	// Blocks traced or called by hash can sit on a non-canonical branch; their
+	// ancestors (BLOCKHASH walk, payment lane parent lookup) must resolve on
+	// that branch too.
+	if header, err := context.b.HeaderByHash(context.ctx, hash); err == nil && header != nil && header.Number.Uint64() == number {
+		return header
+	}
+	return nil
 }
 
 func (context *ChainContext) Config() *params.ChainConfig {
@@ -2089,6 +2092,8 @@ func marshalReceipt(receipt *types.Receipt, blockHash common.Hash, blockNumber u
 		fields["logs"] = []*types.Log{}
 	}
 
+	addPaymentLaneFields(fields, receipt)
+
 	if tx.Type() == types.BlobTxType {
 		fields["blobGasUsed"] = hexutil.Uint64(receipt.BlobGasUsed)
 		fields["blobGasPrice"] = (*hexutil.Big)(receipt.BlobGasPrice)
@@ -3023,6 +3028,8 @@ func MarshalReceipt(receipt *types.Receipt, blockHash common.Hash, blockNumber u
 	if receipt.Logs == nil {
 		fields["logs"] = []*types.Log{}
 	}
+
+	addPaymentLaneFields(fields, receipt)
 
 	if tx.Type() == types.BlobTxType {
 		fields["blobGasUsed"] = hexutil.Uint64(receipt.BlobGasUsed)

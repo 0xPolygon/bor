@@ -32,6 +32,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/stretchr/testify/require"
 )
 
 // TestCreation tests that different genesis and fork rule combinations result in
@@ -699,5 +700,75 @@ func TestForkIDBorForkSet(t *testing.T) {
 		} else if have.Next != 1000 {
 			t.Errorf("%s missing from the fork ID: have %x", name, have)
 		}
+	}
+}
+
+// The payment lane fork block and every later lane parameter version are
+// consensus changes, so each is listed with the Bor forks.
+func TestGatherForksPaymentLane(t *testing.T) {
+	t.Parallel()
+
+	lane := params.DefaultPaymentLaneConfig(params.MainnetPaymentLaneAssets)
+	cfg := *params.BorUnittestChainConfig
+	bor := *cfg.Bor
+	bor.PaymentLaneBlock = big.NewInt(9_000_001)
+	bor.PaymentLane = map[string]*params.PaymentLaneConfig{"9000001": lane, "9500002": lane}
+	cfg.Bor = &bor
+
+	heightForks, _ := GatherForks(&cfg, 0)
+	require.Contains(t, heightForks, uint64(9_000_001))
+	require.Contains(t, heightForks, uint64(9_500_002))
+}
+
+// The lane fork and each later parameter version change consensus, so each
+// enters the handshake fork ID: a peer that missed a retune is rejected once
+// the retune is active, instead of splitting off at the first payment.
+func TestForkIDPaymentLaneVersions(t *testing.T) {
+	const fork, retune = 100_000_000, 100_500_000
+
+	lane := params.DefaultPaymentLaneConfig(params.MainnetPaymentLaneAssets)
+	config := *params.BorMainnetChainConfig
+	bor := *config.Bor
+	bor.PaymentLaneBlock = big.NewInt(fork)
+	bor.PaymentLane = map[string]*params.PaymentLaneConfig{"100000000": lane, "100500000": lane}
+	config.Bor = &bor
+
+	stale := bor
+	stale.PaymentLane = map[string]*params.PaymentLaneConfig{"100000000": lane}
+	staleConfig := config
+	staleConfig.Bor = &stale
+
+	genesis := core.DefaultBorMainnetGenesisBlock().ToBlock()
+
+	if have := NewID(&config, genesis, fork-1, 0); have.Next != fork {
+		t.Fatalf("before the lane: next %d, want %d", have.Next, fork)
+	}
+	if have := NewID(&config, genesis, fork, 0); have.Next != retune {
+		t.Fatalf("after the lane: next %d, want the retune %d", have.Next, retune)
+	}
+
+	upgraded := NewID(&config, genesis, retune, 0)
+	missed := NewID(&staleConfig, genesis, retune, 0)
+	if upgraded.Hash == missed.Hash {
+		t.Fatal("the retune did not change the fork ID")
+	}
+
+	tests := []struct {
+		name string
+		head uint64
+		id   ID
+		err  error
+	}{
+		{"peer without the retune before it", retune - 1, NewID(&staleConfig, genesis, retune-1, 0), nil},
+		{"peer without the retune after it", retune, missed, ErrRemoteStale},
+		{"upgraded peer after the retune", retune, upgraded, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filter := newFilter(&config, genesis, func() (uint64, uint64) { return tt.head, 0 })
+			if err := filter(tt.id); err != tt.err {
+				t.Errorf("have %v, want %v", err, tt.err)
+			}
+		})
 	}
 }

@@ -315,7 +315,7 @@ func TestExecutionFailureBranches(t *testing.T) {
 		if err != nil {
 			t.Fatalf("state: %v", err)
 		}
-		env := newBlockEnv(h.chain, statedb, openOn(parent, h.config, commitment.Head{}).GetBlockOpen(), nil)
+		env := newBlockEnv(h.chain, statedb, openOn(parent, h.config, commitment.Head{}).GetBlockOpen(), nil, nil)
 		sealed := executionSealFromEnv(env)
 		engine.reject = true
 		if _, _, err := env.finalizeSeal(h.chain, sealed); err == nil {

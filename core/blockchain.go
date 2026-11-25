@@ -5277,6 +5277,8 @@ func (bc *BlockChain) emitPostWriteEvents(block *types.Block, receipts []*types.
 		})
 		return
 	}
+	recordPaymentLaneMetrics(bc.chainConfig, block, bc, receipts)
+
 	var invalidation string
 	if bc.preconfProvider != nil {
 		invalidation = bc.preconfProvider.CompletePreconf(block, receipts, true)

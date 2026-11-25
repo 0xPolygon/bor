@@ -276,6 +276,10 @@ func ApplyTransactionWithEVM(msg *Message, gp *GasPool, statedb *state.StateDB, 
 		return nil, result.Err
 	}
 
+	if err := checkNonPaymentBudget(evm, result); err != nil {
+		return nil, err
+	}
+
 	// Update the state with pending changes.
 	var root []byte
 
