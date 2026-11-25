@@ -470,11 +470,12 @@ type intervalAdjust struct {
 // worker is the main object which takes care of submitting new work to consensus engine
 // and gathering the sealing result.
 type worker struct {
-	config      *Config
-	chainConfig *params.ChainConfig
-	engine      consensus.Engine
-	eth         Backend
-	chain       *core.BlockChain
+	shadowLastParent atomic.Value // shadow experiment: last parent built on (common.Hash)
+	config           *Config
+	chainConfig      *params.ChainConfig
+	engine           consensus.Engine
+	eth              Backend
+	chain            *core.BlockChain
 
 	// sequencer, when set, receives block-production progress (open, per-tx,
 	// seal) for the sequence store. Set before the worker starts; nil when
@@ -2625,6 +2626,16 @@ func (w *worker) buildAttempt(interrupt *atomic.Int32, noempty bool, timestamp i
 		prefetchedTxHashes: &sync.Map{},
 		preBuildDuration:   time.Since(buildStart),
 		production:         true,
+	}
+
+	// Shadow experiment: a real producer seals and moves to the next height;
+	// the shadow node never seals, so the worker would rebuild on the same
+	// parent with caches the first build warmed. Build once per parent.
+	if shadowtrace.Enabled() {
+		if last, _ := w.shadowLastParent.Load().(common.Hash); last == parent.Hash() {
+			return
+		}
+		w.shadowLastParent.Store(parent.Hash())
 	}
 
 	shadowtrace.BuildStart(parent.Number.Uint64()+1, buildStart, parent.GetActualTime(), time.Time{})

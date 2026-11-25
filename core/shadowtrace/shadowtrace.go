@@ -221,6 +221,7 @@ type buildTrace struct {
 	fillEnd      time.Time
 	outcome      string
 	sealSkipped  bool
+	emitted      bool // printed once: a same-height rebuild flushes early
 	gap8         int
 	txs          map[common.Hash]*txTrace
 }
@@ -407,6 +408,11 @@ func Applied(number uint64, hash common.Hash, start time.Time, dur time.Duration
 ) {
 	with(number, func(b *buildTrace) {
 		t := b.tx(hash)
+		// Later passes re-meet committed txs (nonce too low); keep the
+		// first successful apply.
+		if t.applied && t.applyErr == "" {
+			return
+		}
 		t.applied = true
 		t.pass = len(b.passes)
 		t.applyStart, t.applyDur, t.prefetched = start, dur, prefetched
@@ -488,6 +494,11 @@ const slowApply = 20 * time.Millisecond
 func emit(b *buildTrace) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
+	if b.emitted {
+		return
+	}
+	b.emitted = true
 
 	all := toggle("txlog") == "all"
 
