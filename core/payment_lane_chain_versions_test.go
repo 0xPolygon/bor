@@ -397,7 +397,7 @@ func TestPaymentLanePresetOnImport(t *testing.T) {
 
 // Three very different versions in one chain, imported serially and with
 // BlockSTM: A (base and tip discounts, tip cap, hard switch at 50%), B (payment
-// gas free, gate at 99%) and C (the token is no longer a listed asset).
+// gas free, gate at the 65% target) and C (the token is no longer a listed asset).
 // A node that misses version C rejects the first block where the token stops
 // being discounted.
 func TestPaymentLaneLeverVersionsOnImport(t *testing.T) {
@@ -407,7 +407,7 @@ func TestPaymentLaneLeverVersionsOnImport(t *testing.T) {
 		Assets: []common.Address{laneToken}, BaseFeeDiscountBps: 5_000, TipDiscountBps: 5_000,
 		TipCap: big.NewInt(2_000_000_000), ActiveGasPercentage: 50,
 	}
-	b := &params.PaymentLaneConfig{Assets: []common.Address{laneToken}, BaseFeeDiscountBps: 10_000, TipDiscountBps: 10_000, ActiveGasPercentage: 99}
+	b := &params.PaymentLaneConfig{Assets: []common.Address{laneToken}, BaseFeeDiscountBps: 10_000, TipDiscountBps: 10_000, ActiveGasPercentage: 65}
 	c := &params.PaymentLaneConfig{Assets: []common.Address{laneBurner}, BaseFeeDiscountBps: 2_500, ActiveGasPercentage: 30, RampEndGasPercentage: 31}
 	versions := map[string]*params.PaymentLaneConfig{"1": a, "3": b, "5": c}
 
@@ -421,7 +421,7 @@ func TestPaymentLaneLeverVersionsOnImport(t *testing.T) {
 		case 1:
 			lc.fillTo(bg, 60) // past A's hard switch: block 2 gets nothing
 		case 3:
-			lc.fillTo(bg, 95) // B's gate is 99: block 4 still gets everything
+			lc.fillTo(bg, 60) // B's gate is 65: block 4 still gets everything
 		}
 	})
 

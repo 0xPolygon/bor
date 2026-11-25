@@ -435,13 +435,17 @@ func TestPaymentLanePricingMatrix(t *testing.T) {
 	}{
 		{"no discount configured", func(c *params.PaymentLaneConfig) { c.BaseFeeDiscountBps, c.TipCap = 0, nil }, 10_000, gwei(350)},
 		{"base only 75%", func(c *params.PaymentLaneConfig) { c.BaseFeeDiscountBps, c.TipCap = 7500, nil }, 10_000, new(big.Int).Add(gwei(62), big.NewInt(500_000_000+100_000_000_000))},
-		{"base only 100%", func(c *params.PaymentLaneConfig) { c.BaseFeeDiscountBps, c.TipCap = 10_000, nil }, 10_000, gwei(100)},
+		{"base only 100%", func(c *params.PaymentLaneConfig) {
+			c.BaseFeeDiscountBps, c.TipCap, c.ActiveGasPercentage, c.RampEndGasPercentage = 10_000, nil, 65, 0
+		}, 10_000, gwei(100)},
 		{"tip cap only 30 gwei", func(c *params.PaymentLaneConfig) { c.BaseFeeDiscountBps = 0 }, 10_000, gwei(280)},
 		{"tip discount only 50%", func(c *params.PaymentLaneConfig) { c.BaseFeeDiscountBps, c.TipCap, c.TipDiscountBps = 0, nil, 5000 }, 10_000, gwei(300)},
 		{"tip discount 100%", func(c *params.PaymentLaneConfig) { c.BaseFeeDiscountBps, c.TipCap, c.TipDiscountBps = 0, nil, 10_000 }, 10_000, gwei(250)},
 		{"tip discount then cap", func(c *params.PaymentLaneConfig) { c.BaseFeeDiscountBps, c.TipDiscountBps = 0, 5000 }, 10_000, gwei(280)},
 		{"tip discount below cap", func(c *params.PaymentLaneConfig) { c.BaseFeeDiscountBps, c.TipDiscountBps = 0, 8000 }, 10_000, gwei(270)},
-		{"everything free", func(c *params.PaymentLaneConfig) { c.BaseFeeDiscountBps, c.TipDiscountBps = 10_000, 10_000 }, 10_000, new(big.Int)},
+		{"everything free", func(c *params.PaymentLaneConfig) {
+			c.BaseFeeDiscountBps, c.TipDiscountBps, c.ActiveGasPercentage, c.RampEndGasPercentage = 10_000, 10_000, 65, 0
+		}, 10_000, new(big.Int)},
 		{"both (50% base, 30 gwei cap), half scale", func(c *params.PaymentLaneConfig) {}, 5_000, big.NewInt(252_500_000_000)},
 		{"both, zero scale", func(c *params.PaymentLaneConfig) {}, 0, gwei(350)},
 	}

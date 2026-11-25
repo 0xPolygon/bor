@@ -31,6 +31,11 @@ const (
 	// Fixed here so a later default can never invalidate parameters that are
 	// already in force.
 	paymentLaneMinCapPercentage = 66
+
+	// paymentLaneFreeEndPercentage is the parent usage by which a free base
+	// fee must be gone: the default EIP-1559 target when the lane was
+	// introduced, fixed for the same reason as paymentLaneMinCapPercentage.
+	paymentLaneFreeEndPercentage = 65
 )
 
 var errPaymentLaneConfig = errors.New("invalid payment lane config")
@@ -93,13 +98,12 @@ func (c *PaymentLaneConfig) Validate() error {
 		return err
 	}
 
-	// A free base fee behind a gate that never closes would let anyone fill
-	// every block with payments at no cost, pushing up the base fee everyone
-	// else pays. The tip doesn't count: nothing in consensus sets a minimum,
-	// and a producer filling its own block pays it to itself. Either the base
-	// fee or the gate has to bite.
-	if c.BaseFeeDiscountBps == PaymentLaneMaxBps && c.ActiveGasPercentage == 100 {
-		return fmt.Errorf("%w: payment gas free at any parent usage", errPaymentLaneConfig)
+	// A free base fee still in force above the EIP-1559 target would let a
+	// producer keep its own blocks above it with payments that cost nothing,
+	// pushing up the base fee everyone else pays. The tip doesn't count:
+	// nothing in consensus sets a minimum, and a producer pays it to itself.
+	if c.BaseFeeDiscountBps == PaymentLaneMaxBps && c.discountEndPercentage() > paymentLaneFreeEndPercentage {
+		return fmt.Errorf("%w: free base fee past the EIP-1559 target", errPaymentLaneConfig)
 	}
 
 	if err := validatePaymentLaneAssets(c.Assets); err != nil {
@@ -107,6 +111,16 @@ func (c *PaymentLaneConfig) Validate() error {
 	}
 
 	return c.validateMinAmounts()
+}
+
+// discountEndPercentage is the parent usage up to which some discount
+// applies: the end of the ramp, or the gate itself without one.
+func (c *PaymentLaneConfig) discountEndPercentage() uint64 {
+	if c.RampEndGasPercentage != 0 {
+		return c.RampEndGasPercentage
+	}
+
+	return c.ActiveGasPercentage
 }
 
 func (c *PaymentLaneConfig) validateGate() error {

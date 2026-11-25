@@ -18,27 +18,27 @@ import (
 // addPaymentLaneFields adds a "paymentLane" object to a marshalled receipt
 // when the transaction went through the payment lane. effectiveGasPrice stays
 // the nominal price (it is derived from the tx alone); "fee" is what the
-// sender actually paid.
+// sender actually paid. Receipts fresh from execution (sync send, receipt
+// subscriptions) carry no price, so "fee" is left out there rather than
+// reported as 0.
 func addPaymentLaneFields(fields map[string]interface{}, receipt *types.Receipt) {
 	lane, ok := core.PaymentLaneFromLogs(receipt.Logs)
 	if !ok {
 		return
 	}
 
-	discount := new(big.Int).Add(lane.BaseCut, lane.TipCut)
-	fee := new(big.Int)
-
-	if receipt.EffectiveGasPrice != nil {
-		fee.Mul(new(big.Int).SetUint64(receipt.GasUsed), receipt.EffectiveGasPrice)
-		fee.Sub(fee, discount)
-	}
-
-	fields["paymentLane"] = map[string]interface{}{
+	out := map[string]interface{}{
 		"gas":             hexutil.Uint64(lane.Gas),
 		"baseFeeDiscount": (*hexutil.Big)(lane.BaseCut),
 		"tipDiscount":     (*hexutil.Big)(lane.TipCut),
-		"fee":             (*hexutil.Big)(fee),
 	}
+
+	if receipt.EffectiveGasPrice != nil {
+		fee := new(big.Int).Mul(new(big.Int).SetUint64(receipt.GasUsed), receipt.EffectiveGasPrice)
+		out["fee"] = (*hexutil.Big)(fee.Sub(fee, new(big.Int).Add(lane.BaseCut, lane.TipCut)))
+	}
+
+	fields["paymentLane"] = out
 }
 
 // PaymentLaneQuote simulates args on the latest block and prices the result

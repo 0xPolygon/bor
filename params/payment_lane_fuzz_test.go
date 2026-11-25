@@ -83,7 +83,7 @@ func FuzzPaymentLaneNonPaymentGasCap(f *testing.F) {
 
 func FuzzPaymentLaneConfigJSON(f *testing.F) {
 	f.Add([]byte(`{"assets":["0xa11ce00000000000000000000000000000000001"],"baseFeeDiscountBps":8000,"activeGasPercentage":20,"rampEndGasPercentage":70,"countAllowancePulls":true}`))
-	f.Add([]byte(`{"assets":["0xa11ce00000000000000000000000000000000001"],"minAmounts":{"0xa11ce00000000000000000000000000000000001":1000},"baseFeeDiscountBps":10000,"tipDiscountBps":5000,"tipCap":"0x1","activeGasPercentage":100,"nonPaymentGasCapPercentage":99}`))
+	f.Add([]byte(`{"assets":["0xa11ce00000000000000000000000000000000001"],"minAmounts":{"0xa11ce00000000000000000000000000000000001":1000},"baseFeeDiscountBps":9999,"tipDiscountBps":5000,"tipCap":1,"activeGasPercentage":50,"nonPaymentGasCapPercentage":81}`))
 	f.Add([]byte(`{"assets":[],"activeGasPercentage":0}`))
 	f.Add([]byte(`{"tipCap":-1,"activeGasPercentage":50,"assets":["0x01"]}`))
 

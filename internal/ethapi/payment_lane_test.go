@@ -109,6 +109,20 @@ func TestPaymentLaneReceiptAndQuote(t *testing.T) {
 			require.Positive(t, discount.Sign())
 			require.Equal(t, new(big.Int).Sub(nominal, discount), lane["fee"].(*hexutil.Big).ToInt())
 		}
+
+		// Receipts fresh from execution (sync send, receipt subscriptions)
+		// carry no effective gas price: the fee is left out, not reported as 0.
+		fresh := *receipts[0]
+		fresh.EffectiveGasPrice = nil
+		for _, receipt := range []map[string]interface{}{
+			marshalReceipt(&fresh, block.Hash(), 2, signer, paid, 0, false),
+			MarshalReceipt(&fresh, block.Hash(), 2, signer, paid, 0),
+		} {
+			lane, ok := receipt["paymentLane"].(map[string]interface{})
+			require.True(t, ok, "paymentLane field")
+			require.NotContains(t, lane, "fee")
+			require.Positive(t, lane["baseFeeDiscount"].(*hexutil.Big).ToInt().Sign())
+		}
 	})
 
 	t.Run("quote", func(t *testing.T) {

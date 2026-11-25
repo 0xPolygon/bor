@@ -35,25 +35,37 @@ func TestPaymentLaneConfigValidate(t *testing.T) {
 		{"default", func(*PaymentLaneConfig) {}, ""},
 		{"nil tip cap is uncapped", func(c *PaymentLaneConfig) { c.TipCap = nil }, ""},
 		{"zero tip cap", func(c *PaymentLaneConfig) { c.TipCap = new(big.Int) }, ""},
-		{"full base discount", func(c *PaymentLaneConfig) { c.BaseFeeDiscountBps = PaymentLaneMaxBps }, ""},
+		{"full base discount", func(c *PaymentLaneConfig) { c.BaseFeeDiscountBps = PaymentLaneMaxBps }, "free base fee past the EIP-1559 target"},
+		// A free base fee has to be gone by the target, or a producer could keep
+		// its own blocks above it with free payments and push the base fee up.
+		{"free up to the target", func(c *PaymentLaneConfig) { c.BaseFeeDiscountBps, c.ActiveGasPercentage = PaymentLaneMaxBps, 65 }, ""},
+		{"free one past the target", func(c *PaymentLaneConfig) {
+			c.BaseFeeDiscountBps, c.ActiveGasPercentage = PaymentLaneMaxBps, 66
+		}, "free base fee past the EIP-1559 target"},
+		{"free fading out by the target", func(c *PaymentLaneConfig) {
+			c.BaseFeeDiscountBps, c.ActiveGasPercentage, c.RampEndGasPercentage = PaymentLaneMaxBps, 40, 65
+		}, ""},
+		{"free fading out past the target", func(c *PaymentLaneConfig) {
+			c.BaseFeeDiscountBps, c.ActiveGasPercentage, c.RampEndGasPercentage = PaymentLaneMaxBps, 40, 66
+		}, "free base fee past the EIP-1559 target"},
 		{"full tip discount", func(c *PaymentLaneConfig) { c.TipDiscountBps = PaymentLaneMaxBps }, ""},
 		{"no discount at all", func(c *PaymentLaneConfig) { c.BaseFeeDiscountBps, c.TipCap = 0, nil }, ""},
 		{"max assets", func(c *PaymentLaneConfig) { c.Assets, c.MinAmounts = tooMany[:PaymentLaneMaxAssets], nil }, ""},
 		{"always on", func(c *PaymentLaneConfig) { c.ActiveGasPercentage = 100 }, ""},
 		{"free and always on", func(c *PaymentLaneConfig) {
 			c.BaseFeeDiscountBps, c.TipDiscountBps, c.ActiveGasPercentage = PaymentLaneMaxBps, PaymentLaneMaxBps, 100
-		}, "payment gas free at any parent usage"},
+		}, "free base fee past the EIP-1559 target"},
 		{"free by zero tip cap and always on", func(c *PaymentLaneConfig) {
 			c.BaseFeeDiscountBps, c.TipCap, c.ActiveGasPercentage = PaymentLaneMaxBps, new(big.Int), 100
-		}, "payment gas free at any parent usage"},
-		{"free behind a gate", func(c *PaymentLaneConfig) {
+		}, "free base fee past the EIP-1559 target"},
+		{"free behind a gate above the target", func(c *PaymentLaneConfig) {
 			c.BaseFeeDiscountBps, c.TipDiscountBps, c.ActiveGasPercentage = PaymentLaneMaxBps, PaymentLaneMaxBps, 99
-		}, ""},
+		}, "free base fee past the EIP-1559 target"},
 		// The tip is no cost to a producer filling its own block, and nothing
 		// in consensus sets a minimum one.
 		{"always on, base free, tip charged", func(c *PaymentLaneConfig) {
 			c.BaseFeeDiscountBps, c.TipCap, c.ActiveGasPercentage = PaymentLaneMaxBps, big.NewInt(1), 100
-		}, "payment gas free at any parent usage"},
+		}, "free base fee past the EIP-1559 target"},
 		{"always on, base nearly free", func(c *PaymentLaneConfig) {
 			c.BaseFeeDiscountBps, c.ActiveGasPercentage = PaymentLaneMaxBps-1, 100
 		}, ""},
