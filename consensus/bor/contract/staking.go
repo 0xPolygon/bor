@@ -1,20 +1,22 @@
 package contract
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	borabi "github.com/ethereum/go-ethereum/consensus/bor/abi"
 	"github.com/ethereum/go-ethereum/consensus/bor/staking"
 	"github.com/ethereum/go-ethereum/consensus/bor/statefull"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
+	"github.com/holiman/uint256"
 )
 
 const (
@@ -151,9 +153,30 @@ func (sc *StakingContractsClient) LogStakeUpdates(state vm.StateDB, header *type
 // systemCall runs one call from the system address. Like a state sync, a call
 // that reverts or runs out of gas does not fail the block.
 func (sc *StakingContractsClient) systemCall(to common.Address, data []byte, state vm.StateDB, header *types.Header, chCtx statefull.ChainContext, vmCfg vm.Config) (uint64, error) {
+	gasUsed, err := sc.execute(to, data, state, header, chCtx, vmCfg)
+	if err != nil {
+		log.Error("Staking system call failed", "number", header.Number, "to", to, "selector", hexutil.Encode(data[:min(len(data), 4)]), "gas", gasUsed, "err", err)
+	}
+
+	return gasUsed, nil
+}
+
+// execute runs the call the way statefull.ApplyMessage does and returns the
+// EVM's error. ApplyMessage reports a call that returns no data as failed,
+// which is right for the state receiver and wrong for these calls: they
+// return nothing when they succeed.
+func (sc *StakingContractsClient) execute(to common.Address, data []byte, state vm.StateDB, header *types.Header, chCtx statefull.ChainContext, vmCfg vm.Config) (uint64, error) {
 	statefull.PrepareStateSyncContext(state, sc.chainConfig, header.Number, header.Time, header.Coinbase, to)
 
-	return statefull.ApplyMessage(context.Background(), statefull.GetSystemMessage(to, data), state, header, sc.chainConfig, chCtx, vmCfg)
+	evm := vm.NewEVM(core.NewEVMBlockContext(header, chCtx, &header.Coinbase), state, sc.chainConfig, vmCfg)
+	evm.SetTxContext(core.NewEVMTxContextForStateSync())
+
+	_, gasLeft, err := evm.Call(params.BorSystemAddress, to, data, params.MaxTxGas, new(uint256.Int))
+	if err != nil {
+		state.Finalise(true)
+	}
+
+	return params.MaxTxGas - gasLeft, err
 }
 
 // readLastID runs a view call on the block's working state. A contract with no

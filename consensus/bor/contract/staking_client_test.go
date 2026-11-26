@@ -156,6 +156,32 @@ func TestStakingContractsClient_RevertIsNotAnError(t *testing.T) {
 	require.Zero(t, reportID)
 }
 
+// The staking calls return no data. A call counts as failed only when the EVM
+// says so, and a failed call still uses gas and leaves the state unchanged.
+func TestStakingContractsClient_ExecuteReportsTheCallError(t *testing.T) {
+	t.Parallel()
+
+	env := newStakingEnv(t, true)
+
+	next, err := PackValidatorStatus(&staking.ValidatorStatusRecord{ID: 1})
+	require.NoError(t, err)
+
+	gasUsed, err := env.client.execute(testStakingAddr, next, env.statedb, env.header, env.chain, vm.Config{})
+	require.NoError(t, err)
+	require.NotZero(t, gasUsed)
+
+	skipped, err := PackValidatorStatus(&staking.ValidatorStatusRecord{ID: 5})
+	require.NoError(t, err)
+
+	gasUsed, err = env.client.execute(testStakingAddr, skipped, env.statedb, env.header, env.chain, vm.Config{})
+	require.ErrorIs(t, err, vm.ErrExecutionReverted)
+	require.NotZero(t, gasUsed)
+	require.Less(t, gasUsed, params.MaxTxGas)
+
+	statusID, _ := env.lastIDs(t)
+	require.Equal(t, uint64(1), statusID)
+}
+
 func TestStakingContractsClient_PackErrors(t *testing.T) {
 	t.Parallel()
 
