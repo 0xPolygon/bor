@@ -74,6 +74,7 @@ func (c *DumpconfigCommand) Run(args []string) int {
 	userConfig.Sealer.GasPriceRaw = userConfig.Sealer.GasPrice.String()
 	userConfig.Sealer.RecommitRaw = userConfig.Sealer.Recommit.String()
 	userConfig.Sealer.BlockTimeRaw = userConfig.Sealer.BlockTime.String()
+	userConfig.Sealer.HeavyWarmDeferMaxRaw = userConfig.Sealer.HeavyWarmDeferMax.String()
 	userConfig.Gpo.MaxPriceRaw = userConfig.Gpo.MaxPrice.String()
 	userConfig.Gpo.IgnorePriceRaw = userConfig.Gpo.IgnorePrice.String()
 	userConfig.Cache.TrieTimeoutRaw = userConfig.Cache.TrieTimeout.String()

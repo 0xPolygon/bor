@@ -600,6 +600,8 @@ type worker struct {
 	speculativeWorkCh chan *speculativeWorkReq
 
 	stallWatch *producerStallWatch // Reports when this node, as the span producer, stops announcing blocks
+
+	heavyWarm *heavyWarmer // Warms heavy pool txs on arrival; nil when disabled
 }
 
 //nolint:staticcheck
@@ -671,6 +673,11 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 	}
 
 	worker.newpayloadTimeout = newpayloadTimeout
+
+	if config.HeavyWarm {
+		worker.heavyWarm = newHeavyWarmer(heavyWarmConfigFrom(config), chainConfig, worker.chain, eth.TxPool(), worker.minerTip)
+		worker.heavyWarm.start()
+	}
 
 	worker.wg.Add(4)
 
@@ -847,6 +854,15 @@ func (w *worker) close() {
 	close(w.exitCh)
 	w.wg.Wait()
 	w.prefetchWg.Wait()
+	w.heavyWarm.stop()
+}
+
+// minerTip returns the current minimum miner tip.
+func (w *worker) minerTip() *uint256.Int {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	return w.tip
 }
 
 // recalcRecommit recalculates the resubmitting interval upon feedback.
@@ -1937,6 +1953,16 @@ mainloop:
 		if tx.Protected() && !w.chainConfig.IsEIP155(env.header.Number) {
 			log.Trace("Ignoring replay protected transaction", "hash", ltx.Hash, "eip155", w.chainConfig.EIP155Block)
 			txs.Pop()
+			continue
+		}
+		// Late-tx rule: a heavy tx whose warm is still running is skipped
+		// for this pass (with the rest of its sender's txs, like any Pop) so
+		// a later pass applies it warm. shouldDefer stops skipping after
+		// HeavyWarmDeferMax, so a slow warm cannot keep the tx out.
+		if w.heavyWarm.shouldDefer(tx) {
+			log.Trace("Deferring heavy transaction while its warm runs", "hash", ltx.Hash)
+			txs.Pop()
+
 			continue
 		}
 		// Start executing the transaction

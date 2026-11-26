@@ -18,6 +18,7 @@ package core
 
 import (
 	"bytes"
+	"errors"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -251,6 +252,13 @@ func (p *StatePrefetcher) prefetchOneTx(
 
 	result, err := ApplyMessage(evm, msg, new(GasPool).AddGas(header.GasLimit))
 	if err != nil {
+		fails.Add(1)
+		return 0, false
+	}
+	// An interrupted run ends without an ApplyMessage error but has warmed
+	// only part of the tx's state. Reporting it as prefetched would keep the
+	// tx out of later prefetch rounds while it is still cold.
+	if errors.Is(result.Err, vm.ErrInterrupt) {
 		fails.Add(1)
 		return 0, false
 	}

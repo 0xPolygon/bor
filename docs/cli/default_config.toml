@@ -118,6 +118,12 @@ devfakeauthor = false
   base-fee-change-denominator = 0
   prefetch = false
   prefetch-gaslimit-percent = 100
+  heavywarm = false
+  heavywarm-gas = 5000000
+  heavywarm-workers = 4
+  heavywarm-queue = 256
+  heavywarm-persender = 4
+  heavywarm-defermax = "800ms"
   disable-pending-block = false
 
 [jsonrpc]
