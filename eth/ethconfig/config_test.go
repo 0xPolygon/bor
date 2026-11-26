@@ -94,6 +94,22 @@ func TestCreateConsensusEngine_OverrideHeimdallClient(t *testing.T) {
 	require.True(t, ok, "Expected Bor consensus engine")
 }
 
+func TestCreateConsensusEngine_RejectsStakingForkWithoutContracts(t *testing.T) {
+	t.Parallel()
+
+	for _, withoutHeimdall := range []bool{false, true} {
+		chainConfig := newTestBorChainConfig()
+		chainConfig.Bor.NativeStakingBlock = big.NewInt(128)
+		chainConfig.Bor.StakingContract = "0x2825f62686974624Af583e23dDd7C7Fe8F1B12ff"
+
+		ethConfig := &Config{OverrideHeimdallClient: &mockHeimdallClient{}, WithoutHeimdall: withoutHeimdall}
+
+		engine, err := CreateConsensusEngine(chainConfig, ethConfig, rawdb.NewMemoryDatabase(), nil, vm.Config{})
+		require.ErrorContains(t, err, "distributorContract")
+		require.Nil(t, engine)
+	}
+}
+
 func TestCreateConsensusEngine_CommaSeparatedHeimdallURL(t *testing.T) {
 	t.Parallel()
 	ethConfig := &Config{

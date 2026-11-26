@@ -395,6 +395,10 @@ func CreateConsensusEngine(chainConfig *params.ChainConfig, ethConfig *Config, d
 		genesisContractsClient := contract.NewGenesisContractsClient(chainConfig, chainConfig.Bor.ValidatorContract, chainConfig.Bor.StateReceiverContract, blockchainAPI)
 		spanner := span.NewChainSpanner(blockchainAPI, borabi.ValidatorSet(), chainConfig, common.HexToAddress(chainConfig.Bor.ValidatorContract))
 
+		if err := bor.ValidateStakingConfig(chainConfig.Bor); err != nil {
+			return nil, err
+		}
+
 		log.Info("Creating consensus engine", "withoutHeimdall", ethConfig.WithoutHeimdall)
 		log.Info("Using custom miner block time", "blockTime", ethConfig.Miner.BlockTime)
 

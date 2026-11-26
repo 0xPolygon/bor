@@ -394,8 +394,9 @@ func New(
 	c.parentActualTimeCache, _ = lru.New(10)
 
 	if borConfig.NativeStakingBlock != nil {
-		if !common.IsHexAddress(borConfig.StakingContract) || !common.IsHexAddress(borConfig.DistributorContract) {
-			panic(fmt.Sprintf("BUG: nativeStakingBlock is set but stakingContract %q or distributorContract %q is not an address", borConfig.StakingContract, borConfig.DistributorContract))
+		// CreateConsensusEngine checks this first and returns the error.
+		if err := ValidateStakingConfig(borConfig); err != nil {
+			panic(fmt.Sprintf("BUG: %v", err))
 		}
 
 		c.StakingContractsClient = contract.NewStakingContractsClient(chainConfig)

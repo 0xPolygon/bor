@@ -4,12 +4,32 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/bor/staking"
 	"github.com/ethereum/go-ethereum/consensus/bor/statefull"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/params"
 )
+
+// ValidateStakingConfig checks that a config with the native staking fork set
+// names both contracts.
+func ValidateStakingConfig(cfg *params.BorConfig) error {
+	if cfg == nil || cfg.NativeStakingBlock == nil {
+		return nil
+	}
+
+	if !common.IsHexAddress(cfg.StakingContract) {
+		return fmt.Errorf("nativeStakingBlock is set but stakingContract %q is not an address", cfg.StakingContract)
+	}
+
+	if !common.IsHexAddress(cfg.DistributorContract) {
+		return fmt.Errorf("nativeStakingBlock is set but distributorContract %q is not an address", cfg.DistributorContract)
+	}
+
+	return nil
+}
 
 // StakingContract makes the system calls that deliver Heimdall's staking
 // records to the Polygon staking contracts.

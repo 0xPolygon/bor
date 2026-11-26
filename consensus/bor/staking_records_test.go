@@ -227,6 +227,41 @@ func lastStakingIDs(t *testing.T, b *Bor, chain *core.BlockChain, header *types.
 // TestFinalize_StakingRecordDelivery checks, on every finalize path, that
 // records are delivered from the fork block's first sprint start on, after
 // state syncs and in ID order, and not before the fork or between sprints.
+func TestValidateStakingConfig(t *testing.T) {
+	t.Parallel()
+
+	const address = "0x2825f62686974624Af583e23dDd7C7Fe8F1B12ff"
+
+	tests := []struct {
+		name    string
+		cfg     *params.BorConfig
+		wantErr string
+	}{
+		{name: "no bor config"},
+		{name: "fork unset, no contracts", cfg: &params.BorConfig{}},
+		{name: "fork unset, bad contracts ignored", cfg: &params.BorConfig{StakingContract: "x", DistributorContract: "y"}},
+		{name: "fork set, both contracts", cfg: &params.BorConfig{NativeStakingBlock: big.NewInt(0), StakingContract: address, DistributorContract: address}},
+		{name: "fork set, no staking contract", cfg: &params.BorConfig{NativeStakingBlock: big.NewInt(0), DistributorContract: address}, wantErr: "stakingContract"},
+		{name: "fork set, bad staking contract", cfg: &params.BorConfig{NativeStakingBlock: big.NewInt(0), StakingContract: "0x12", DistributorContract: address}, wantErr: "stakingContract"},
+		{name: "fork set, no distributor contract", cfg: &params.BorConfig{NativeStakingBlock: big.NewInt(0), StakingContract: address}, wantErr: "distributorContract"},
+		{name: "fork set, bad distributor contract", cfg: &params.BorConfig{NativeStakingBlock: big.NewInt(0), StakingContract: address, DistributorContract: "zz"}, wantErr: "distributorContract"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := ValidateStakingConfig(tt.cfg)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
 func TestFinalize_StakingRecordDelivery(t *testing.T) {
 	t.Parallel()
 
