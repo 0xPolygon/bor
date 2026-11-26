@@ -659,7 +659,7 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 	worker.newpayloadTimeout = newpayloadTimeout
 
 	if config.HeavyWarm {
-		worker.heavyWarm = newHeavyWarmer(heavyWarmConfigFrom(config), chainConfig, worker.chain, eth.TxPool(), worker.minerTip)
+		worker.heavyWarm = newHeavyWarmer(heavyWarmConfigFrom(config), chainConfig, worker.chain, eth.TxPool(), worker.minerTip, worker.IsRunning)
 		worker.heavyWarm.start()
 	}
 
@@ -837,6 +837,23 @@ func (w *worker) close() {
 	w.wg.Wait()
 	w.prefetchWg.Wait()
 	w.heavyWarm.stop()
+}
+
+// heavyDeferAllowed reports whether a heavy tx skipped now can still be
+// applied in this block: only under continuous building, with at least one
+// full refresh pass left before the seal margin. On the one-shot fill path a
+// skip would cost the tx (and its sender's later nonces) the whole block.
+func (w *worker) heavyDeferAllowed(env *environment) bool {
+	if w.heavyWarm == nil || env.sequencerMuted {
+		return false
+	}
+
+	poll := w.sequencerPoll(env.header.Number)
+	if poll <= 0 {
+		return false
+	}
+
+	return time.Until(env.header.GetActualTime())-sealMargin > poll
 }
 
 // minerTip returns the current minimum miner tip.
@@ -1962,9 +1979,12 @@ mainloop:
 		}
 		// Late-tx rule: a heavy tx whose warm is still running is skipped
 		// for this pass (with the rest of its sender's txs, like any Pop) so
-		// a later pass applies it warm. shouldDefer stops skipping after
-		// HeavyWarmDeferMax, so a slow warm cannot keep the tx out.
-		if w.heavyWarm.shouldDefer(tx) {
+		// a later pass of the same block applies it warm. shouldDefer stops
+		// skipping after HeavyWarmDeferMax, so a slow warm cannot keep the
+		// tx out; heavyDeferAllowed limits skipping to continuous building
+		// with another refresh pass still ahead.
+		deferAllowed := w.heavyDeferAllowed(env)
+		if deferAllowed && w.heavyWarm.shouldDefer(tx) {
 			if ran, ok := w.heavyWarm.runningFor(tx.Hash()); ok {
 				shadowtrace.Deferred(env.header.Number.Uint64(), tx.Hash(), ran, false)
 			}
@@ -1972,7 +1992,7 @@ mainloop:
 			txs.Pop()
 
 			continue
-		} else if w.heavyWarm != nil && !shadowtrace.HWOff() {
+		} else if deferAllowed && !shadowtrace.HWOff() {
 			if ran, ok := w.heavyWarm.runningFor(tx.Hash()); ok && tx.Gas() >= w.heavyWarm.cfg.gas {
 				shadowtrace.Deferred(env.header.Number.Uint64(), tx.Hash(), ran, true)
 			}

@@ -81,7 +81,7 @@ func TestHeavyWarmShouldDefer(t *testing.T) {
 	require.False(t, disabled.shouldDefer(heavy), "nil warmer never defers")
 	disabled.stop() // nil-safe
 
-	w := newHeavyWarmer(testWarmConfig(), params.TestChainConfig, nil, nil, nil)
+	w := newHeavyWarmer(testWarmConfig(), params.TestChainConfig, nil, nil, nil, nil)
 
 	require.False(t, w.shouldDefer(heavy), "no warm: apply now")
 
@@ -111,7 +111,7 @@ func TestHeavyWarmShouldDefer(t *testing.T) {
 func TestHeavyWarmAdmission(t *testing.T) {
 	t.Parallel()
 
-	w := newHeavyWarmer(testWarmConfig(), params.TestChainConfig, nil, nil, nil)
+	w := newHeavyWarmer(testWarmConfig(), params.TestChainConfig, nil, nil, nil, nil)
 	key := newKey(t)
 
 	lowCap := warmTestTx(t, key, 0, testHeavyGas, 90, 20) // fee cap < base fee 100
@@ -134,7 +134,7 @@ func TestHeavyWarmPerSenderCap(t *testing.T) {
 
 	cfg := testWarmConfig()
 	cfg.perSender = 2
-	w := newHeavyWarmer(cfg, params.TestChainConfig, nil, nil, nil)
+	w := newHeavyWarmer(cfg, params.TestChainConfig, nil, nil, nil, nil)
 
 	key, other := newKey(t), newKey(t)
 	for nonce := uint64(0); nonce < 3; nonce++ {
@@ -151,7 +151,7 @@ func TestHeavyWarmQueueEvictsLowestFee(t *testing.T) {
 
 	cfg := testWarmConfig()
 	cfg.queue = 2
-	w := newHeavyWarmer(cfg, params.TestChainConfig, nil, nil, nil)
+	w := newHeavyWarmer(cfg, params.TestChainConfig, nil, nil, nil, nil)
 
 	tip20 := warmTestTx(t, newKey(t), 0, testHeavyGas, 1000, 20)
 	tip30 := warmTestTx(t, newKey(t), 0, testHeavyGas, 1000, 30)
@@ -183,7 +183,7 @@ func TestHeavyWarmWarmsPoolTx(t *testing.T) {
 	cfg := testWarmConfig()
 	cfg.gas = params.TxGas // every tx is heavy in this test
 
-	w := newHeavyWarmer(cfg, ethashChainConfig, backend.chain, backend.txPool, func() *uint256.Int { return uint256.NewInt(0) })
+	w := newHeavyWarmer(cfg, ethashChainConfig, backend.chain, backend.txPool, func() *uint256.Int { return uint256.NewInt(0) }, nil)
 	warmed := make(chan common.Hash, 4)
 	w.onWarmed = func(h common.Hash) { warmed <- h }
 	w.start()
@@ -214,21 +214,32 @@ func TestHeavyWarmWarmsPoolTx(t *testing.T) {
 func TestCommitTransactionsDefersRunningHeavyWarm(t *testing.T) {
 	t.Parallel()
 
-	w, backend, cleanup := newTestWorker(t, DefaultTestConfig(), ethashChainConfig, ethash.NewFaker(), rawdb.NewMemoryDatabase(), false, 0)
+	// Rio active from genesis so an attached sequencer counts as continuous
+	// building (copy the Bor config: it is shared with other tests).
+	chainConfig := *ethashChainConfig
+	borConfig := *chainConfig.Bor
+	borConfig.RioBlock = big.NewInt(0)
+	chainConfig.Bor = &borConfig
+
+	w, backend, cleanup := newTestWorker(t, DefaultTestConfig(), &chainConfig, ethash.NewFaker(), rawdb.NewMemoryDatabase(), false, 0)
 	defer cleanup()
 
 	cfg := testWarmConfig()
 	cfg.gas = params.TxGas
 	cfg.deferMax = time.Hour
-	w.heavyWarm = newHeavyWarmer(cfg, ethashChainConfig, backend.chain, backend.txPool, w.minerTip)
+	w.heavyWarm = newHeavyWarmer(cfg, &chainConfig, backend.chain, backend.txPool, w.minerTip, nil)
 
-	tx := pendingTxs[0]
-	commit := func() *environment {
+	// Same sender, nonces 0 and 1: skipping nonce 0 also skips nonce 1.
+	txs := []*types.Transaction{pendingTxs[0], newTxs[0]}
+
+	// commit builds a fresh block whose announce time is `ahead` from now
+	// and returns how many of txs were committed.
+	commit := func(ahead time.Duration) int {
 		parent := backend.chain.CurrentBlock()
 		statedb, _, prefetchReader, processReader, err := backend.chain.StateAtWithReaders(parent.Root)
 		require.NoError(t, err)
 		work, err := w.prepareWork(&generateParams{
-			timestamp:      parent.Time + 1,
+			timestamp:      uint64(time.Now().Add(ahead).Unix()),
 			coinbase:       testBankAddress,
 			parentHash:     parent.Hash(),
 			statedb:        statedb,
@@ -236,34 +247,65 @@ func TestCommitTransactionsDefersRunningHeavyWarm(t *testing.T) {
 			processReader:  processReader,
 		}, false)
 		require.NoError(t, err)
+		work.header.ActualTime = time.Now().Add(ahead)
 
-		signer := types.MakeSigner(ethashChainConfig, work.header.Number, work.header.Time)
-		lazy := map[common.Address][]*txpool.LazyTransaction{testBankAddress: {{
-			Hash:      tx.Hash(),
-			Tx:        tx,
-			Time:      tx.Time(),
-			GasFeeCap: uint256.MustFromBig(tx.GasFeeCap()),
-			GasTipCap: uint256.MustFromBig(tx.GasTipCap()),
-			Gas:       tx.Gas(),
-		}}}
+		signer := types.MakeSigner(&chainConfig, work.header.Number, work.header.Time)
+		var lazy []*txpool.LazyTransaction
+		for _, tx := range txs {
+			lazy = append(lazy, &txpool.LazyTransaction{
+				Hash:      tx.Hash(),
+				Tx:        tx,
+				Time:      tx.Time(),
+				GasFeeCap: uint256.MustFromBig(tx.GasFeeCap()),
+				GasTipCap: uint256.MustFromBig(tx.GasTipCap()),
+				Gas:       tx.Gas(),
+			})
+		}
 		var baseFee *uint256.Int
 		if work.header.BaseFee != nil {
 			baseFee = uint256.MustFromBig(work.header.BaseFee)
 		}
-		plain := newTransactionsByPriceAndNonce(signer, lazy, baseFee, nil)
+		plain := newTransactionsByPriceAndNonce(signer, map[common.Address][]*txpool.LazyTransaction{testBankAddress: lazy}, baseFee, nil)
 		blobs := newTransactionsByPriceAndNonce(signer, nil, baseFee, nil)
 		require.NoError(t, w.commitTransactions(work, plain, blobs, nil, nil))
 
-		return work
+		return work.tcount
+	}
+	setRunning := func(on bool) {
+		w.heavyWarm.mu.Lock()
+		defer w.heavyWarm.mu.Unlock()
+		if on {
+			w.heavyWarm.running[txs[0].Hash()] = time.Now()
+		} else {
+			delete(w.heavyWarm.running, txs[0].Hash())
+		}
 	}
 
-	w.heavyWarm.mu.Lock()
-	w.heavyWarm.running[tx.Hash()] = time.Now()
-	w.heavyWarm.mu.Unlock()
-	require.Equal(t, 0, commit().tcount, "tx skipped while its warm runs")
+	// One-shot fill (no sequencer): never skip, even while the warm runs,
+	// because a skip would cost the whole block.
+	setRunning(true)
+	require.Equal(t, 2, commit(5*time.Second), "one-shot fill: no deferral")
 
-	w.heavyWarm.mu.Lock()
-	delete(w.heavyWarm.running, tx.Hash())
-	w.heavyWarm.mu.Unlock()
-	require.Equal(t, 1, commit().tcount, "tx applied once the warm is done")
+	// Continuous building: a refresh pass is still ahead, so skip.
+	w.sequencer = &recordingSequencer{refresh: 100 * time.Millisecond}
+	w.running.Store(true)
+	defer w.running.Store(false)
+	require.Equal(t, 0, commit(5*time.Second), "LLS: tx and its sender's next nonce skipped while the warm runs")
+
+	// Continuous building, but no full refresh pass left before the seal
+	// margin: apply now.
+	require.Equal(t, 2, commit(sealMargin+50*time.Millisecond), "LLS, no pass left: no deferral")
+
+	// Warm finished: apply.
+	setRunning(false)
+	require.Equal(t, 2, commit(5*time.Second), "warm done: applied")
+}
+
+func TestHeavyWarmIdleWhenNotMining(t *testing.T) {
+	t.Parallel()
+
+	w := newHeavyWarmer(testWarmConfig(), params.TestChainConfig, nil, nil, nil, func() bool { return false })
+	w.offerAll([]*types.Transaction{warmTestTx(t, newKey(t), 0, testHeavyGas, 200, 20)})
+
+	require.Empty(t, queuedHashes(w), "no warms while the worker is not mining")
 }

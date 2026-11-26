@@ -36,9 +36,17 @@ import (
 // The builder side is shouldDefer: while a transaction's warm is running
 // (and has run for less than HeavyWarmDeferMax), the builder skips it for
 // the current pass and retries on a later pass. A transaction whose warm is
-// only queued, was dropped, or ran too long is applied immediately, so the
-// warmer can delay a transaction by at most HeavyWarmDeferMax and can never
-// keep it out of a block.
+// only queued, was dropped, or ran too long is applied immediately. The
+// builder only defers under continuous building (a sequencer refreshing the
+// block from the pool) and only while at least one more refresh pass fits
+// before the seal margin (worker.heavyDeferAllowed), so a deferred
+// transaction normally lands later in the same block. Skipping a tx also
+// skips its sender's later nonces for that pass, like any other Pop. A
+// deferred transaction can still miss the block if later passes fill the
+// remaining gas first.
+//
+// Warms only run while the worker is mining, and admission is re-checked
+// against the current base fee right before each run.
 
 const (
 	// heavyWarmMaxRun cancels a warm run that takes longer than this. The
@@ -168,6 +176,7 @@ type heavyWarmer struct {
 	chain       warmChain
 	pool        warmPool
 	minTip      func() *uint256.Int
+	active      func() bool // warm only while true (the worker is mining); nil = always
 
 	mu      sync.Mutex
 	cond    *sync.Cond
@@ -186,13 +195,14 @@ type heavyWarmer struct {
 	onWarmed func(common.Hash) // test hook, called after each warm attempt
 }
 
-func newHeavyWarmer(cfg heavyWarmConfig, chainConfig *params.ChainConfig, chain warmChain, pool warmPool, minTip func() *uint256.Int) *heavyWarmer {
+func newHeavyWarmer(cfg heavyWarmConfig, chainConfig *params.ChainConfig, chain warmChain, pool warmPool, minTip func() *uint256.Int, active func() bool) *heavyWarmer {
 	w := &heavyWarmer{
 		cfg:         cfg,
 		chainConfig: chainConfig,
 		chain:       chain,
 		pool:        pool,
 		minTip:      minTip,
+		active:      active,
 		queued:      make(map[common.Hash]*warmItem),
 		running:     make(map[common.Hash]time.Time),
 		senders:     make(map[common.Address]int),
@@ -277,7 +287,7 @@ func (w *heavyWarmer) offerAll(txs []*types.Transaction) {
 		minTip  *uint256.Int
 		ready   bool
 	)
-	if shadowtrace.HWOff() {
+	if shadowtrace.HWOff() || (w.active != nil && !w.active()) {
 		return
 	}
 	for _, tx := range txs {
@@ -447,6 +457,13 @@ func (w *heavyWarmer) warm(tx *types.Transaction) {
 	defer func() {
 		shadowtrace.WarmEnd(tx.Hash(), start, head.Number.Uint64(), outcome, warmGas, reads)
 	}()
+
+	// The base fee may have risen since admission: a tx the next block
+	// cannot take is not worth the disk reads now.
+	if header.BaseFee != nil && tx.GasFeeCapIntCmp(header.BaseFee) < 0 {
+		heavyWarmDropFeeMeter.Mark(1)
+		return
+	}
 
 	st, err := w.chain.StateAt(head.Root)
 	if err != nil {
