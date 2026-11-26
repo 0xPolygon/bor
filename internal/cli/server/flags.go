@@ -460,14 +460,14 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 	})
 	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "miner.heavywarm",
-		Usage:   "Execute heavy pool transactions once on arrival to cache their state, and skip a heavy transaction for a build pass while its warm runs",
+		Usage:   "Execute heavy pool transactions once on arrival to cache their state, and (with continuous building) skip a heavy transaction for a build pass while its warm runs",
 		Value:   &c.cliConfig.Sealer.HeavyWarm,
 		Default: c.cliConfig.Sealer.HeavyWarm,
 		Group:   "Sealer",
 	})
 	f.Uint64Flag(&flagset.Uint64Flag{
 		Name:    "miner.heavywarm.gas",
-		Usage:   "Minimum gas limit of a transaction warmed by miner.heavywarm",
+		Usage:   "Minimum gas limit of a transaction warmed by miner.heavywarm (0 = default)",
 		Value:   &c.cliConfig.Sealer.HeavyWarmGas,
 		Default: c.cliConfig.Sealer.HeavyWarmGas,
 		Group:   "Sealer",
