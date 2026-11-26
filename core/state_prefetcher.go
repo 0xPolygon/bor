@@ -288,6 +288,13 @@ func (p *StatePrefetcher) prefetchOneTxOutcome(
 		fails.Add(1)
 		return 0, false, shadowtrace.OutcomeError
 	}
+	// An interrupted run ends without an ApplyMessage error but has warmed
+	// only part of the tx's state. Reporting it as prefetched would keep the
+	// tx out of later prefetch rounds while it is still cold.
+	if errors.Is(result.Err, vm.ErrInterrupt) {
+		fails.Add(1)
+		return 0, false, shadowtrace.OutcomeInterrupted
+	}
 	if intermediateRootPrefetch {
 		stateCpy.IntermediateRoot(true)
 	}

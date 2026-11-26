@@ -18,6 +18,10 @@ import (
 // early warm is still queued or running (try it in a later pass/block).
 func DeferHeavy() bool { return Enabled() && toggle("deferheavy") == "on" }
 
+// HWOff reports whether the real heavy-tx warmer (miner.heavywarm) is
+// switched off for this window (toggle hw=off). Default: on.
+func HWOff() bool { return Enabled() && toggle("hw") == "off" }
+
 // DeferMax is the longest a warm may block its tx; after that the builder
 // applies the tx cold (no starvation).
 func DeferMax() time.Duration {

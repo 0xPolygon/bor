@@ -152,6 +152,15 @@ type Config struct {
 	EnablePrefetch          bool           // Enable transaction prefetching from pool during block building
 	PrefetchGasLimitPercent uint64         // Gas limit percentage for prefetching (e.g., 100 = 100%, 110 = 110%)
 
+	// Heavy-tx warmer: execute heavy pool txs once on arrival so their state
+	// is cached before a build applies them (see heavy_warm.go).
+	HeavyWarm          bool          // Enable the heavy-tx warmer and the builder's late-tx rule
+	HeavyWarmGas       uint64        // Minimum gas limit of a heavy tx
+	HeavyWarmWorkers   int           // Concurrent warm runs
+	HeavyWarmQueue     int           // Max queued warms (lowest fee evicted first)
+	HeavyWarmPerSender int           // Max queued + running warms per sender
+	HeavyWarmDeferMax  time.Duration // Longest the builder skips a heavy tx whose warm is running (0 = never skip)
+
 	DisablePendingBlock bool // Disable the pending block creation loop on non block producer nodes
 }
 
@@ -175,6 +184,13 @@ var DefaultConfig = Config{
 	Recommit:                2 * time.Second,
 	EnablePrefetch:          true,
 	PrefetchGasLimitPercent: 100, // 100% of header gas limit
+
+	HeavyWarm:          false,
+	HeavyWarmGas:       5_000_000,
+	HeavyWarmWorkers:   4,
+	HeavyWarmQueue:     256,
+	HeavyWarmPerSender: 4,
+	HeavyWarmDeferMax:  800 * time.Millisecond,
 
 	DisablePendingBlock: false,
 }

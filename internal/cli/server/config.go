@@ -483,6 +483,27 @@ type SealerConfig struct {
 	// PrefetchGasLimitPercent is the gas limit percentage for prefetching (e.g., 100 = 100%, 110 = 110%)
 	PrefetchGasLimitPercent uint64 `hcl:"prefetch-gaslimit-percent,optional" toml:"prefetch-gaslimit-percent,optional"`
 
+	// HeavyWarm executes heavy pool transactions once on arrival so their state is
+	// cached before a build applies them, and lets the builder skip a heavy
+	// transaction for a pass while its warm is running.
+	HeavyWarm bool `hcl:"heavywarm,optional" toml:"heavywarm,optional"`
+
+	// HeavyWarmGas is the minimum gas limit of a heavy transaction
+	HeavyWarmGas uint64 `hcl:"heavywarm-gas,optional" toml:"heavywarm-gas,optional"`
+
+	// HeavyWarmWorkers is the number of concurrent warm runs
+	HeavyWarmWorkers int `hcl:"heavywarm-workers,optional" toml:"heavywarm-workers,optional"`
+
+	// HeavyWarmQueue is the maximum number of queued warms
+	HeavyWarmQueue int `hcl:"heavywarm-queue,optional" toml:"heavywarm-queue,optional"`
+
+	// HeavyWarmPerSender is the maximum number of queued and running warms per sender
+	HeavyWarmPerSender int `hcl:"heavywarm-persender,optional" toml:"heavywarm-persender,optional"`
+
+	// HeavyWarmDeferMax is the longest the builder skips a heavy transaction whose warm is running
+	HeavyWarmDeferMax    time.Duration `hcl:"-,optional" toml:"-"`
+	HeavyWarmDeferMaxRaw string        `hcl:"heavywarm-defermax,optional" toml:"heavywarm-defermax,optional"`
+
 	// DisablePendingBlock disables the pending block creation loop on non block producer nodes. When
 	// set, 'pending' block will be unavailable for RPC queries. This won't apply for block producer
 	// nodes.
@@ -1037,6 +1058,12 @@ func DefaultConfig() *Config {
 			BlockTime:                0,
 			EnablePrefetch:           false, // Disabled by default, requires explicit opt-in
 			PrefetchGasLimitPercent:  100,
+			HeavyWarm:                false, // Disabled by default, requires explicit opt-in
+			HeavyWarmGas:             5_000_000,
+			HeavyWarmWorkers:         4,
+			HeavyWarmQueue:           256,
+			HeavyWarmPerSender:       4,
+			HeavyWarmDeferMax:        800 * time.Millisecond,
 			TargetGasPercentage:      0, // Initialize to 0, will be set from CLI or remain 0 (meaning use default)
 			BaseFeeChangeDenominator: 0, // Initialize to 0, will be set from CLI or remain 0 (meaning use default)
 			DisablePendingBlock:      false,
@@ -1259,6 +1286,7 @@ func (c *Config) fillTimeDurations() error {
 		{"jsonrpc.evmtimeout", &c.JsonRPC.RPCEVMTimeout, &c.JsonRPC.RPCEVMTimeoutRaw},
 		{"miner.recommit", &c.Sealer.Recommit, &c.Sealer.RecommitRaw},
 		{"miner.blocktime", &c.Sealer.BlockTime, &c.Sealer.BlockTimeRaw},
+		{"miner.heavywarm.defermax", &c.Sealer.HeavyWarmDeferMax, &c.Sealer.HeavyWarmDeferMaxRaw},
 		{"jsonrpc.timeouts.read", &c.JsonRPC.HttpTimeout.ReadTimeout, &c.JsonRPC.HttpTimeout.ReadTimeoutRaw},
 		{"jsonrpc.timeouts.readheader", &c.JsonRPC.HttpTimeout.ReadHeaderTimeout, &c.JsonRPC.HttpTimeout.ReadHeaderTimeoutRaw},
 		{"jsonrpc.timeouts.write", &c.JsonRPC.HttpTimeout.WriteTimeout, &c.JsonRPC.HttpTimeout.WriteTimeoutRaw},
@@ -1445,6 +1473,12 @@ func (c *Config) buildEth(stack *node.Node, accountManager *accounts.Manager) (*
 		n.Miner.BlockTime = c.Sealer.BlockTime
 		n.Miner.EnablePrefetch = c.Sealer.EnablePrefetch
 		n.Miner.PrefetchGasLimitPercent = c.Sealer.PrefetchGasLimitPercent
+		n.Miner.HeavyWarm = c.Sealer.HeavyWarm
+		n.Miner.HeavyWarmGas = c.Sealer.HeavyWarmGas
+		n.Miner.HeavyWarmWorkers = c.Sealer.HeavyWarmWorkers
+		n.Miner.HeavyWarmQueue = c.Sealer.HeavyWarmQueue
+		n.Miner.HeavyWarmPerSender = c.Sealer.HeavyWarmPerSender
+		n.Miner.HeavyWarmDeferMax = c.Sealer.HeavyWarmDeferMax
 		n.Miner.DisablePendingBlock = c.Sealer.DisablePendingBlock
 
 		// Validate prefetch gas limit percentage

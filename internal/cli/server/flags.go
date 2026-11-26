@@ -446,6 +446,48 @@ func (c *Command) Flags(config *Config) *flagset.Flagset {
 		Group:   "Sealer",
 	})
 	f.BoolFlag(&flagset.BoolFlag{
+		Name:    "miner.heavywarm",
+		Usage:   "Execute heavy pool transactions once on arrival to cache their state, and skip a heavy transaction for a build pass while its warm runs",
+		Value:   &c.cliConfig.Sealer.HeavyWarm,
+		Default: c.cliConfig.Sealer.HeavyWarm,
+		Group:   "Sealer",
+	})
+	f.Uint64Flag(&flagset.Uint64Flag{
+		Name:    "miner.heavywarm.gas",
+		Usage:   "Minimum gas limit of a transaction warmed by miner.heavywarm",
+		Value:   &c.cliConfig.Sealer.HeavyWarmGas,
+		Default: c.cliConfig.Sealer.HeavyWarmGas,
+		Group:   "Sealer",
+	})
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "miner.heavywarm.workers",
+		Usage:   "Number of concurrent heavy-transaction warm runs",
+		Value:   &c.cliConfig.Sealer.HeavyWarmWorkers,
+		Default: c.cliConfig.Sealer.HeavyWarmWorkers,
+		Group:   "Sealer",
+	})
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "miner.heavywarm.queue",
+		Usage:   "Maximum number of queued heavy-transaction warms (lowest fee evicted first)",
+		Value:   &c.cliConfig.Sealer.HeavyWarmQueue,
+		Default: c.cliConfig.Sealer.HeavyWarmQueue,
+		Group:   "Sealer",
+	})
+	f.IntFlag(&flagset.IntFlag{
+		Name:    "miner.heavywarm.persender",
+		Usage:   "Maximum number of queued and running heavy-transaction warms per sender",
+		Value:   &c.cliConfig.Sealer.HeavyWarmPerSender,
+		Default: c.cliConfig.Sealer.HeavyWarmPerSender,
+		Group:   "Sealer",
+	})
+	f.DurationFlag(&flagset.DurationFlag{
+		Name:    "miner.heavywarm.defermax",
+		Usage:   "Longest the builder skips a heavy transaction whose warm is running (0 = never skip)",
+		Value:   &c.cliConfig.Sealer.HeavyWarmDeferMax,
+		Default: c.cliConfig.Sealer.HeavyWarmDeferMax,
+		Group:   "Sealer",
+	})
+	f.BoolFlag(&flagset.BoolFlag{
 		Name:    "miner.enableDynamicGasLimit",
 		Usage:   "Enable dynamic gas limit adjustment based on base fee",
 		Value:   &c.cliConfig.Sealer.EnableDynamicGasLimit,

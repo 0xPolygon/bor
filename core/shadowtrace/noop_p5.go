@@ -9,6 +9,7 @@ import (
 )
 
 func DeferHeavy() bool                                    { return false }
+func HWOff() bool                                         { return false }
 func DeferMax() time.Duration                             { return 0 }
 func WarmAdmit() bool                                     { return false }
 func FloodRate() int                                      { return 0 }

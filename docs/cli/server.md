@@ -380,6 +380,18 @@ The ```bor server``` command runs the Bor client.
 
 - ```miner.gasprice```: Minimum gas price for mining a transaction (default: 25000000000)
 
+- ```miner.heavywarm```: Execute heavy pool transactions once on arrival to cache their state, and skip a heavy transaction for a build pass while its warm runs (default: false)
+
+- ```miner.heavywarm.defermax```: Longest the builder skips a heavy transaction whose warm is running (0 = never skip) (default: 800ms)
+
+- ```miner.heavywarm.gas```: Minimum gas limit of a transaction warmed by miner.heavywarm (default: 5000000)
+
+- ```miner.heavywarm.persender```: Maximum number of queued and running heavy-transaction warms per sender (default: 4)
+
+- ```miner.heavywarm.queue```: Maximum number of queued heavy-transaction warms (lowest fee evicted first) (default: 256)
+
+- ```miner.heavywarm.workers```: Number of concurrent heavy-transaction warm runs (default: 4)
+
 - ```miner.interruptcommit```: Interrupt block commit when block creation time is passed (default: true)
 
 - ```miner.prefetch```: Enable transaction prefetching from the pool during block building (default: false)

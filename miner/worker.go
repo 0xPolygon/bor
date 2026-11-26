@@ -587,6 +587,8 @@ type worker struct {
 
 	// Pipelined SRC: speculative work channel for block N+1 execution
 	speculativeWorkCh chan *speculativeWorkReq
+
+	heavyWarm *heavyWarmer // Warms heavy pool txs on arrival; nil when disabled
 }
 
 //nolint:staticcheck
@@ -655,6 +657,11 @@ func newWorker(config *Config, chainConfig *params.ChainConfig, engine consensus
 	}
 
 	worker.newpayloadTimeout = newpayloadTimeout
+
+	if config.HeavyWarm {
+		worker.heavyWarm = newHeavyWarmer(heavyWarmConfigFrom(config), chainConfig, worker.chain, eth.TxPool(), worker.minerTip)
+		worker.heavyWarm.start()
+	}
 
 	worker.wg.Add(4)
 
@@ -829,6 +836,15 @@ func (w *worker) close() {
 	close(w.exitCh)
 	w.wg.Wait()
 	w.prefetchWg.Wait()
+	w.heavyWarm.stop()
+}
+
+// minerTip returns the current minimum miner tip.
+func (w *worker) minerTip() *uint256.Int {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	return w.tip
 }
 
 // recalcRecommit recalculates the resubmitting interval upon feedback.
@@ -1942,6 +1958,23 @@ mainloop:
 				}
 
 				shadowtrace.Deferred(env.header.Number.Uint64(), tx.Hash(), waited, true)
+			}
+		}
+		// Late-tx rule: a heavy tx whose warm is still running is skipped
+		// for this pass (with the rest of its sender's txs, like any Pop) so
+		// a later pass applies it warm. shouldDefer stops skipping after
+		// HeavyWarmDeferMax, so a slow warm cannot keep the tx out.
+		if w.heavyWarm.shouldDefer(tx) {
+			if ran, ok := w.heavyWarm.runningFor(tx.Hash()); ok {
+				shadowtrace.Deferred(env.header.Number.Uint64(), tx.Hash(), ran, false)
+			}
+			log.Trace("Deferring heavy transaction while its warm runs", "hash", ltx.Hash)
+			txs.Pop()
+
+			continue
+		} else if w.heavyWarm != nil && !shadowtrace.HWOff() {
+			if ran, ok := w.heavyWarm.runningFor(tx.Hash()); ok && tx.Gas() >= w.heavyWarm.cfg.gas {
+				shadowtrace.Deferred(env.header.Number.Uint64(), tx.Hash(), ran, true)
 			}
 		}
 		// Start executing the transaction
