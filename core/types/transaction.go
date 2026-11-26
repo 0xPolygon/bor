@@ -51,7 +51,7 @@ const (
 	DynamicFeeTxType = 0x02
 	BlobTxType       = 0x03
 	SetCodeTxType    = 0x04
-	StakingTxType    = 0x7e
+	StakingTxType    = 0x79
 	StateSyncTxType  = 0x7f
 )
 

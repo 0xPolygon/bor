@@ -78,6 +78,17 @@ func TestStakingTx_BinaryRoundTrip(t *testing.T) {
 	}
 }
 
+// The type byte is part of the block encoding, so a change to it is a fork. It
+// avoids 0x7e and 0x7a to 0x7c, which are transaction types on other chains that
+// shared tooling already decodes as theirs.
+func TestStakingTx_TypeByte(t *testing.T) {
+	require.Equal(t, 0x79, StakingTxType)
+
+	enc, err := NewTx(&StakingTx{BlockNumber: 256, StakeUpdate: true}).MarshalBinary()
+	require.NoError(t, err)
+	require.Equal(t, "79c6820100c0c001", common.Bytes2Hex(enc))
+}
+
 func TestStakingTx_HashSensitivity(t *testing.T) {
 	t.Parallel()
 
