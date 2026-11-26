@@ -292,9 +292,9 @@ func TestCommitTransactionsDefersRunningHeavyWarm(t *testing.T) {
 	defer w.running.Store(false)
 	require.Equal(t, 0, commit(5*time.Second), "LLS: tx and its sender's next nonce skipped while the warm runs")
 
-	// Continuous building, but no full refresh pass left before the seal
-	// margin: apply now.
-	require.Equal(t, 2, commit(sealMargin+50*time.Millisecond), "LLS, no pass left: no deferral")
+	// Continuous building near the deadline: still skip (the tx moves to the
+	// next block warm instead of being killed by the deadline while cold).
+	require.Equal(t, 0, commit(sealMargin+50*time.Millisecond), "LLS near the deadline: still deferred")
 
 	// Warm finished: apply.
 	setRunning(false)

@@ -839,21 +839,22 @@ func (w *worker) close() {
 	w.heavyWarm.stop()
 }
 
-// heavyDeferAllowed reports whether a heavy tx skipped now can still be
-// applied in this block: only under continuous building, with at least one
-// full refresh pass left before the seal margin. On the one-shot fill path a
-// skip would cost the tx (and its sender's later nonces) the whole block.
+// heavyDeferAllowed reports whether the builder may skip a heavy tx whose
+// warm is running: only under continuous building, where later refresh
+// passes re-offer it. On the one-shot fill path a skip would cost the tx
+// (and its sender's later nonces) the whole block for no gain.
+//
+// Under continuous building the skip is allowed up to the end of the block:
+// near the deadline a skipped tx moves to the next block (applied warm), while
+// applying it cold there gets it killed by the deadline after wasting the
+// tail of the fill window (measured on the shadow clone: all 17 kills with
+// the warmer on were such late cold applies).
 func (w *worker) heavyDeferAllowed(env *environment) bool {
 	if w.heavyWarm == nil || env.sequencerMuted {
 		return false
 	}
 
-	poll := w.sequencerPoll(env.header.Number)
-	if poll <= 0 {
-		return false
-	}
-
-	return time.Until(env.header.GetActualTime())-sealMargin > poll
+	return w.sequencerPoll(env.header.Number) > 0
 }
 
 // minerTip returns the current minimum miner tip.
@@ -1981,8 +1982,7 @@ mainloop:
 		// for this pass (with the rest of its sender's txs, like any Pop) so
 		// a later pass of the same block applies it warm. shouldDefer stops
 		// skipping after HeavyWarmDeferMax, so a slow warm cannot keep the
-		// tx out; heavyDeferAllowed limits skipping to continuous building
-		// with another refresh pass still ahead.
+		// tx out; heavyDeferAllowed limits skipping to continuous building.
 		deferAllowed := w.heavyDeferAllowed(env)
 		if deferAllowed && w.heavyWarm.shouldDefer(tx) {
 			if ran, ok := w.heavyWarm.runningFor(tx.Hash()); ok {

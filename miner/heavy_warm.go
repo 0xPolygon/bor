@@ -38,12 +38,11 @@ import (
 // the current pass and retries on a later pass. A transaction whose warm is
 // only queued, was dropped, or ran too long is applied immediately. The
 // builder only defers under continuous building (a sequencer refreshing the
-// block from the pool) and only while at least one more refresh pass fits
-// before the seal margin (worker.heavyDeferAllowed), so a deferred
-// transaction normally lands later in the same block. Skipping a tx also
-// skips its sender's later nonces for that pass, like any other Pop. A
-// deferred transaction can still miss the block if later passes fill the
-// remaining gas first.
+// block from the pool, see worker.heavyDeferAllowed), so a deferred
+// transaction normally lands later in the same block; one deferred near the
+// end of the block moves to the next block, where it is applied warm.
+// Skipping a tx also skips its sender's later nonces for that pass, like any
+// other Pop.
 //
 // Warms only run while the worker is mining, and admission is re-checked
 // against the current base fee right before each run.
