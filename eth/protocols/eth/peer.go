@@ -484,7 +484,7 @@ func (p *Peer) RequestTxs(id uint64, hashes []common.Hash) error {
 
 // IsTrusted returns whether the peer is a trusted peer or not.
 func (p *Peer) IsTrusted() bool {
-	return p.Info().Network.Trusted
+	return p.Trusted()
 }
 
 // IsStatic returns whether the peer is a static peer or not.
