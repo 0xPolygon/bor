@@ -90,7 +90,7 @@ func TestSessionContinuesAfterMatchingCanonicalCompletion(t *testing.T) {
 	}
 	parked := s.parked
 	s.parked = nil
-	s.setEnv(newBlockEnv(fixture.h.chain, parked, open, s.sealed))
+	s.setEnv(newBlockEnv(fixture.h.chain, parked, open, s.sealed, nil))
 	s.env.cacheable = false
 	if s.env.statedb != parked || s.env.header.ParentHash != fixture.block.Hash() {
 		t.Fatal("next open did not extend the parked post-state")
@@ -153,7 +153,7 @@ func TestSessionRetainsOnlyMatchingCanonicalTransition(t *testing.T) {
 			}
 			open := openOn(parent.Header(), h.config, commitment.Head{}).GetBlockOpen()
 			open.ParentHash = test.parent(parent).Bytes()
-			s.setEnv(newBlockEnv(h.chain, statedb, open, nil))
+			s.setEnv(newBlockEnv(h.chain, statedb, open, nil, nil))
 			s.activateEnv()
 			s.applyRecord(recordEntry(marshalTransaction(t, h.transfer(t, 0)), s.head).GetRecord())
 			if kept := s.env != nil; kept != test.keep {

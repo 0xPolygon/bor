@@ -541,6 +541,7 @@ func TestReinforceMultiClientPreCompilesTest(t *testing.T) {
 		"IsLisovoPro",
 		"IsChicago",
 		"IsHampi",
+		"IsPaymentLane", // fee-only fork: precompile set unchanged, see TestPaymentLanePrecompilesUnchanged
 	}
 
 	if len(actual) != len(expected) {

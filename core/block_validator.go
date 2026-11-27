@@ -160,6 +160,9 @@ func (v *BlockValidator) ValidateStateCheap(block *types.Block, statedb *state.S
 	if block.GasUsed() != res.GasUsed {
 		return fmt.Errorf("%w (remote: %d local: %d)", ErrGasUsedMismatch, block.GasUsed(), res.GasUsed)
 	}
+	if err := ValidatePaymentLaneCapacity(v.config, block.Header(), res.Receipts); err != nil {
+		return err
+	}
 	rbloom := types.MergeBloom(res.Receipts)
 	if rbloom != header.Bloom {
 		return fmt.Errorf("%w (remote: %x  local: %x)", ErrBloomMismatch, header.Bloom, rbloom)
@@ -188,6 +191,9 @@ func (v *BlockValidator) ValidateState(block *types.Block, statedb *state.StateD
 	header := block.Header()
 	if block.GasUsed() != res.GasUsed {
 		return fmt.Errorf("%w (remote: %d local: %d)", ErrGasUsedMismatch, block.GasUsed(), res.GasUsed)
+	}
+	if err := ValidatePaymentLaneCapacity(v.config, block.Header(), res.Receipts); err != nil {
+		return err
 	}
 	// Validate the received block's bloom with the one derived from the generated receipts.
 	// For valid blocks this should always validate to true.

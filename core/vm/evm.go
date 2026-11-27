@@ -142,6 +142,11 @@ type BlockContext struct {
 	BaseFee     *big.Int       // Provides information for BASEFEE (0 if vm runs with NoBaseFee flag and 0 gas price)
 	BlobBaseFee *big.Int       // Provides information for BLOBBASEFEE (0 if vm runs with NoBaseFee flag and 0 blob gas price)
 	Random      *common.Hash   // Provides information for PREVRANDAO
+
+	// PaymentLaneScaleBps is the share of the lane discounts that applies to
+	// this block, derived from the parent header (see
+	// params.PaymentLaneConfig.ScaleForParent); 0 means full price.
+	PaymentLaneScaleBps uint64
 }
 
 // TxContext provides the EVM with information about a transaction.
@@ -218,6 +223,8 @@ type EVM struct {
 	// that repeated moduli skip uint256.MulMod's internal Reciprocal recompute.
 	mulmodMemo modReciprocal
 
+	lane laneMeter // payment lane metering of the current tx (payment_lane.go)
+
 	// interrupt is the block-building timeout flag. When set, the interpreter
 	// checks it on every opcode across all call depths (Call, DelegateCall,
 	// StaticCall, CallCode, Create). Use SetInterrupt to configure.
@@ -250,6 +257,8 @@ func NewEVM(blockCtx BlockContext, statedb StateDB, chainConfig *params.ChainCon
 		hasher:      crypto.NewKeccakState(),
 	}
 	evm.precompiles = activePrecompiledContracts(evm.chainRules)
+
+	evm.initPaymentLane(chainConfig)
 
 	switch {
 	case evm.chainRules.IsChicago:
@@ -326,6 +335,7 @@ func (evm *EVM) SetTxContext(txCtx TxContext) {
 		txCtx.AccessEvents = state.NewAccessEvents(evm.StateDB.PointCache())
 	}
 	evm.TxContext = txCtx
+	evm.resetPaymentLane()
 }
 
 // Cancel cancels any running EVM operation. This may be called concurrently and
@@ -348,6 +358,9 @@ func isSystemCall(caller common.Address) bool {
 // the necessary steps to create accounts and reverses the state in case of an
 // execution error or failed value transfer.
 func (evm *EVM) Call(caller common.Address, addr common.Address, input []byte, gas uint64, value *uint256.Int) (ret []byte, leftOverGas uint64, err error) {
+	lane := evm.laneStart()
+	defer func(startGas uint64) { evm.laneClose(lane, startGas-leftOverGas, err) }(gas)
+
 	// Capture the tracer start/end events in debug mode
 	if evm.Config.Tracer != nil {
 		evm.captureBegin(evm.depth, CALL, caller, addr, input, gas, value.ToBig())
@@ -406,6 +419,7 @@ func (evm *EVM) Call(caller common.Address, addr common.Address, input []byte, g
 			contract := NewContract(caller, addr, value, gas, evm.jumpDests)
 			contract.IsSystemCall = isSystemCall(caller)
 			contract.SetCallCode(evm.resolveCodeHash(addr), code)
+			evm.laneOpenCall(&lane, caller, addr, input)
 			ret, err = evm.Run(contract, input, false)
 			gas = contract.Gas
 		}
@@ -439,6 +453,9 @@ func (evm *EVM) Call(caller common.Address, addr common.Address, input []byte, g
 // CallCode differs from Call in the sense that it executes the given address'
 // code with the caller as context.
 func (evm *EVM) CallCode(caller common.Address, addr common.Address, input []byte, gas uint64, value *uint256.Int) (ret []byte, leftOverGas uint64, err error) {
+	lane := evm.laneStart()
+	defer func() { evm.laneDropOnError(lane, err) }()
+
 	// Invoke tracer hooks that signal entering/exiting a call frame
 	if evm.Config.Tracer != nil {
 		evm.captureBegin(evm.depth, CALLCODE, caller, addr, input, gas, value.ToBig())
@@ -492,6 +509,9 @@ func (evm *EVM) CallCode(caller common.Address, addr common.Address, input []byt
 // DelegateCall differs from CallCode in the sense that it executes the given address'
 // code with the caller as context and the caller is set to the caller of the caller.
 func (evm *EVM) DelegateCall(originCaller common.Address, caller common.Address, addr common.Address, input []byte, gas uint64, value *uint256.Int) (ret []byte, leftOverGas uint64, err error) {
+	lane := evm.laneStart()
+	defer func() { evm.laneDropOnError(lane, err) }()
+
 	// Invoke tracer hooks that signal entering/exiting a call frame
 	if evm.Config.Tracer != nil {
 		// DELEGATECALL inherits value from parent call
@@ -538,6 +558,9 @@ func (evm *EVM) DelegateCall(originCaller common.Address, caller common.Address,
 // Opcodes that attempt to perform such modifications will result in exceptions
 // instead of performing the modifications.
 func (evm *EVM) StaticCall(caller common.Address, addr common.Address, input []byte, gas uint64) (ret []byte, leftOverGas uint64, err error) {
+	lane := evm.laneStart()
+	defer func(startGas uint64) { evm.laneClose(lane, startGas-leftOverGas, err) }(gas)
+
 	// Invoke tracer hooks that signal entering/exiting a call frame
 	if evm.Config.Tracer != nil {
 		evm.captureBegin(evm.depth, STATICCALL, caller, addr, input, gas, nil)
@@ -573,6 +596,7 @@ func (evm *EVM) StaticCall(caller common.Address, addr common.Address, input []b
 		// When an error was returned by the EVM or when setting the creation code
 		// above we revert to the snapshot and consume any gas remaining. Additionally
 		// when we're in Homestead this also counts for code storage gas errors.
+		evm.laneOpenFrame(&lane, addr)
 		ret, err = evm.Run(contract, input, true)
 		gas = contract.Gas
 	}
@@ -594,6 +618,9 @@ func (evm *EVM) StaticCall(caller common.Address, addr common.Address, input []b
 
 // create creates a new contract using code as deployment code.
 func (evm *EVM) create(caller common.Address, code []byte, gas uint64, value *uint256.Int, address common.Address, typ OpCode) (ret []byte, createAddress common.Address, leftOverGas uint64, err error) {
+	lane := evm.laneStart()
+	defer func(startGas uint64) { evm.laneClose(lane, startGas-leftOverGas, err) }(gas)
+
 	if evm.Config.Tracer != nil {
 		evm.captureBegin(evm.depth, typ, caller, address, code, gas, value.ToBig())
 		defer func(startGas uint64) {
@@ -684,6 +711,7 @@ func (evm *EVM) create(caller common.Address, code []byte, gas uint64, value *ui
 	contract.SetCallCode(common.Hash{}, code)
 	contract.IsDeployment = true
 
+	evm.laneOpenFrame(&lane, address)
 	ret, err = evm.initNewContract(contract, address)
 	if err != nil && (evm.chainRules.IsHomestead || err != ErrCodeStoreOutOfGas) {
 		evm.StateDB.RevertToSnapshot(snapshot)

@@ -44,6 +44,14 @@ type ExecutionResult struct {
 	FeeBurnt             *big.Int
 	BurntContractAddress common.Address
 	FeeTipped            *big.Int
+
+	// PaymentLaneGas is the gas spent on payments (metered from the payment
+	// lane fork on, whatever the block's discount scale),
+	// PaymentLaneCapacityGas the gas counted toward the block's payment share,
+	// and PaymentLaneRefund what the sender was not charged.
+	PaymentLaneGas         uint64
+	PaymentLaneCapacityGas uint64
+	PaymentLaneRefund      *big.Int
 }
 
 // Unwrap returns the internal evm error which allows us for further
@@ -645,12 +653,10 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 		if bor := st.evm.ChainConfig().Bor; bor != nil {
 			burntContractAddress = common.HexToAddress(bor.CalculateBurntContract(st.evm.Context.BlockNumber.Uint64()))
 			burnAmount = new(big.Int).Mul(new(big.Int).SetUint64(st.gasUsed()), st.evm.Context.BaseFee)
-			if !st.noFeeBurnAndTip {
-				st.state.AddBalance(burntContractAddress, cmath.BigIntToUint256Int(burnAmount), tracing.BalanceChangeTransfer)
-			}
 		}
 	}
 
+	cut := st.settlePaymentLane(vmerr, effectiveTip, amount, burnAmount, burntContractAddress)
 	if !st.noFeeBurnAndTip {
 		st.state.AddBalance(st.evm.Context.Coinbase, cmath.BigIntToUint256Int(amount), tracing.BalanceIncreaseRewardTransactionFee)
 
@@ -682,7 +688,7 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 		}
 	}
 
-	return &ExecutionResult{
+	return cut.annotate(&ExecutionResult{
 		UsedGas:              st.gasUsed(),
 		MaxUsedGas:           peakGasUsed,
 		Err:                  vmerr,
@@ -691,7 +697,7 @@ func (st *stateTransition) execute() (*ExecutionResult, error) {
 		FeeBurnt:             burnAmount,
 		BurntContractAddress: burntContractAddress,
 		FeeTipped:            amount,
-	}, nil
+	}), nil
 }
 
 // validateAuthorization validates an EIP-7702 authorization against the state.

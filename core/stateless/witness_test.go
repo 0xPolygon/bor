@@ -1104,6 +1104,29 @@ func TestValidateWitnessPreState_ExpectedBlockNumberMismatch(t *testing.T) {
 	}
 }
 
+// TestValidateWitnessPreState_ParentHeaderMismatch rejects a witness whose
+// first header carries the parent's state root but differs from the parent in
+// another field: stateless execution reads the parent (e.g. its gas used,
+// which gates the payment lane) from the witness headers, not the chain.
+func TestValidateWitnessPreState_ParentHeaderMismatch(t *testing.T) {
+	witness, reader, expectedBlock := makeValidatePreStateFixture()
+
+	tampered := types.CopyHeader(witness.Headers[0])
+	tampered.GasUsed++
+	witness.Headers[0] = tampered
+
+	err := ValidateWitnessPreState(witness, reader, expectedBlock)
+	if err == nil {
+		t.Fatal("expected parent header mismatch error, got nil")
+	}
+	if !containsSubstring(err.Error(), "witness parent header mismatch") {
+		t.Errorf("expected parent header mismatch error, got: %v", err)
+	}
+	if !errors.Is(err, ErrInvalidWitness) {
+		t.Errorf("parent header mismatch must match ErrInvalidWitness, got: %v", err)
+	}
+}
+
 func containsSubstring(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {

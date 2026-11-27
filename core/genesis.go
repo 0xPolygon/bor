@@ -391,7 +391,7 @@ func SetupGenesisBlockWithOverride(db ethdb.Database, triedb *triedb.Database, g
 	}
 
 	// Sanity-check the new configuration.
-	if err := newCfg.CheckConfigForkOrder(); err != nil {
+	if err := checkChainConfig(newCfg, head.Number); err != nil {
 		return nil, common.Hash{}, nil, err
 	}
 
@@ -569,7 +569,7 @@ func (g *Genesis) Commit(db ethdb.Database, triedb *triedb.Database) (*types.Blo
 	if config == nil {
 		return nil, errors.New("invalid genesis without chain config")
 	}
-	if err := config.CheckConfigForkOrder(); err != nil {
+	if err := checkChainConfig(config, common.Big0); err != nil {
 		return nil, err
 	}
 	if config.Clique != nil && len(g.ExtraData) < 32+crypto.SignatureLength {

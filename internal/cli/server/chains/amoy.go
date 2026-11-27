@@ -48,6 +48,7 @@ var amoyTestnet = &Chain{
 				HampiBlock:        nil, // unscheduled
 				UburuBlock:        big.NewInt(51978200),
 				SalvadorBlock:     big.NewInt(54310900),
+				PaymentLaneBlock:  nil, // unscheduled
 
 				StateSyncConfirmationDelay: map[string]uint64{
 					"0": 128,

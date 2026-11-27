@@ -49,7 +49,7 @@ func buildPartialReuseBlock(t *testing.T, h *execHarness, txs types.Transactions
 	if err != nil {
 		t.Fatalf("state: %v", err)
 	}
-	env := newBlockEnv(h.chain, statedb, openOn(parent, h.config, commitment.Head{}).GetBlockOpen(), nil)
+	env := newBlockEnv(h.chain, statedb, openOn(parent, h.config, commitment.Head{}).GetBlockOpen(), nil, nil)
 	for _, tx := range txs {
 		if _, _, err := env.applyTransaction(tx); err != nil {
 			t.Fatalf("execute canonical transaction: %v", err)

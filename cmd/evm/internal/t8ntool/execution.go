@@ -126,6 +126,21 @@ type rejectedTx struct {
 	Err   string `json:"error"`
 }
 
+// paymentLaneScale is the payment lane discount scale this block runs with,
+// derived from the parent gas the env carries, so t8n prices a payment as an
+// importing node would. 0 when the lane is not active, or when the env omits
+// the parent gas: without it the gate cannot be evaluated, and full price is
+// the fail-safe answer.
+func (env *stEnv) paymentLaneScale(cfg *params.ChainConfig) uint64 {
+	if env.ParentGasLimit == 0 {
+		return 0
+	}
+
+	parent := &types.Header{GasUsed: env.ParentGasUsed, GasLimit: env.ParentGasLimit}
+
+	return core.PaymentLaneScaleFor(cfg, new(big.Int).SetUint64(env.Number), parent)
+}
+
 // Apply applies a set of transactions to a pre-state
 func (pre *Prestate) Apply(vmConfig vm.Config, chainConfig *params.ChainConfig, txIt txIterator, miningReward int64) (*state.StateDB, *ExecutionResult, []byte, error) {
 	// Capture errors for BLOCKHASH operation, if we haven't been supplied the
@@ -178,6 +193,7 @@ func (pre *Prestate) Apply(vmConfig vm.Config, chainConfig *params.ChainConfig, 
 		rnd := common.BigToHash(pre.Env.Random)
 		vmContext.Random = &rnd
 	}
+	vmContext.PaymentLaneScaleBps = pre.Env.paymentLaneScale(chainConfig)
 	// Calculate the BlobBaseFee
 	var excessBlobGas uint64
 	if pre.Env.ExcessBlobGas != nil {

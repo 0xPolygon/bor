@@ -18,7 +18,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/log"
-	"github.com/ethereum/go-ethereum/trie"
 )
 
 // blockEnv re-executes one speculative block on top of a parent state,
@@ -55,11 +54,13 @@ type blockEnv struct {
 // newBlockEnv builds the execution environment. speculative maps heights of
 // sealed-but-not-yet-imported ancestors to their sealed hashes, so BLOCKHASH
 // resolves them exactly as the producer did — the canonical header walk
-// returns zero for blocks the chain hasn't imported.
-func newBlockEnv(chain *core.BlockChain, statedb *state.StateDB, open *pb.BlockOpen, speculative map[uint64]common.Hash) *blockEnv {
+// returns zero for blocks the chain hasn't imported. parent, when known, is
+// the header the block builds on, which also prices the payment lane: the
+// chain cannot resolve a sealed-but-unimported parent.
+func newBlockEnv(chain *core.BlockChain, statedb *state.StateDB, open *pb.BlockOpen, speculative map[uint64]common.Hash, parent *types.Header) *blockEnv {
 	header := pendingHeader(open)
 
-	blockCtx := core.NewEVMBlockContext(header, chain, nil)
+	blockCtx := core.NewEVMBlockContext(header, openParentChain{chain, parent}, nil)
 
 	walk := blockCtx.GetHash
 	blockCtx.GetHash = func(n uint64) common.Hash {
@@ -99,6 +100,22 @@ func newBlockEnv(chain *core.BlockChain, statedb *state.StateDB, open *pb.BlockO
 	}
 
 	return env
+}
+
+// openParentChain serves the open block's parent even when the chain has not
+// imported it yet, so everything derived from the parent header (the payment
+// lane discount scale) matches what the producer saw.
+type openParentChain struct {
+	*core.BlockChain
+	parent *types.Header
+}
+
+func (c openParentChain) GetHeader(hash common.Hash, number uint64) *types.Header {
+	if c.parent != nil && c.parent.Number.Uint64() == number && c.parent.Hash() == hash {
+		return c.parent
+	}
+
+	return c.BlockChain.GetHeader(hash, number)
 }
 
 // applyRaw executes one streamed raw transaction. The producer only publishes
@@ -279,40 +296,6 @@ type speculativeFinalizationChain struct {
 
 func (*speculativeFinalizationChain) SetStateSync([]*types.StateSyncData) {}
 
-// checkSeal cross-checks the sealed header against the open context this
-// block was executed under and against the re-execution results, including
-// the state root — the catch-all for anything execution missed. At a sprint
-// start with a state-sync tx (absent from the stream) re-execution can't
-// reproduce the sealed roots and this fails; sealResult treats that as a
-// defer-to-canonical, not a bad preconf.
-func (env *blockEnv) checkSeal(sealed *types.Header) error {
-	switch {
-	case sealed.Number.Cmp(env.header.Number) != 0,
-		sealed.Time != env.header.Time,
-		sealed.ParentHash != env.header.ParentHash,
-		sealed.GasLimit != env.header.GasLimit,
-		!bigEqual(sealed.BaseFee, env.header.BaseFee):
-		return fmt.Errorf("%w: open context mismatch at block %s", errSealMismatch, sealed.Number)
-	case sealed.GasUsed != env.header.GasUsed:
-		return fmt.Errorf("%w: gas used %d != re-executed %d at block %s",
-			errSealMismatch, sealed.GasUsed, env.header.GasUsed, sealed.Number)
-	}
-
-	receiptsRoot := types.DeriveSha(types.Receipts(env.receipts), trie.NewStackTrie(nil))
-	if receiptsRoot != sealed.ReceiptHash {
-		return fmt.Errorf("%w: receipts root %s != re-executed %s at block %s",
-			errSealMismatch, sealed.ReceiptHash, receiptsRoot, sealed.Number)
-	}
-
-	root := env.statedb.IntermediateRoot(env.evm.ChainConfig().IsEIP158(env.header.Number))
-	if root != sealed.Root {
-		return fmt.Errorf("%w: state root %s != re-executed %s at block %s",
-			errSealMismatch, sealed.Root, root, sealed.Number)
-	}
-
-	return nil
-}
-
 func (env *blockEnv) finalizeSeal(chain *core.BlockChain, sealed *types.Header) (*types.Block, *ReusableExecution, error) {
 	return env.finalizeSealWithHeaders(chain, chain, sealed)
 }
@@ -325,16 +308,13 @@ func (env *blockEnv) finalizeSealWithHeaders(chain *core.BlockChain, headers con
 }
 
 func (env *blockEnv) finalizeVerifiedSeal(chain *core.BlockChain, sealed *types.Header) (*types.Block, *ReusableExecution, error) {
-	switch {
-	case sealed.Number.Cmp(env.header.Number) != 0,
-		sealed.Time != env.header.Time,
-		sealed.ParentHash != env.header.ParentHash,
-		sealed.GasLimit != env.header.GasLimit,
-		!bigEqual(sealed.BaseFee, env.header.BaseFee):
-		return nil, nil, fmt.Errorf("%w: open context mismatch at block %s", errSealMismatch, sealed.Number)
-	case sealed.GasUsed != env.header.GasUsed:
-		return nil, nil, fmt.Errorf("%w: gas used %d != re-executed %d at block %s",
-			errSealMismatch, sealed.GasUsed, env.header.GasUsed, sealed.Number)
+	if err := env.checkSealContext(sealed); err != nil {
+		return nil, nil, err
+	}
+	// Import also checks the payment lane cap. The verdict is final here,
+	// before any deferral: state-sync txs add no gas used and no lane log.
+	if err := core.ValidatePaymentLaneCapacity(chain.Config(), sealed, env.receipts); err != nil {
+		return nil, nil, err
 	}
 	sprint := chain.Config().Bor.CalculateSprint(sealed.Number.Uint64())
 	if sprint == 0 || sealed.Number.Uint64()%sprint == 0 {
@@ -563,15 +543,16 @@ func (s *session) sealResult(sealed *types.Header) (*types.Block, *ReusableExecu
 				s.deferToCanonical = true
 				return nil, nil, false, false
 			}
-			s.skip(s.env.header.Number.Uint64(), "sealed header verification deferred and finalization failed", "err", err)
-			return nil, nil, false, false
+			return s.skipSeal("sealed header verification deferred and finalization failed", err)
 		}
-		s.skip(s.env.header.Number.Uint64(), "sealed header verification failed", "err", err)
-		return nil, nil, false, false
+		return s.skipSeal("sealed header verification failed", err)
 	}
 	assembled, reusable, err := s.env.finalizeVerifiedSeal(s.consumer.chain, sealed)
 	if err == nil {
 		return assembled, reusable, true, true
+	}
+	if errors.Is(err, core.ErrNonPaymentGasCap) {
+		return s.skipSeal("sealed block breaks the payment lane cap", err)
 	}
 	// finalizeVerifiedSeal reports errCachedFinalizationUnavailable at sprint
 	// starts, where the block's state-sync tx is absent from the stream. When
@@ -599,10 +580,7 @@ func (s *session) sealResult(sealed *types.Header) (*types.Block, *ReusableExecu
 	return assembled, nil, true, true
 }
 
-func bigEqual(a, b *big.Int) bool {
-	if a == nil || b == nil {
-		return a == nil && b == nil
-	}
-
-	return a.Cmp(b) == 0
+func (s *session) skipSeal(reason string, cause error) (*types.Block, *ReusableExecution, bool, bool) {
+	s.skip(s.env.header.Number.Uint64(), reason, "err", cause)
+	return nil, nil, false, false
 }

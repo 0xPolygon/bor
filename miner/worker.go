@@ -289,6 +289,9 @@ type environment struct {
 	sidecars []*types.BlobTxSidecar
 	blobs    int
 
+	paymentLaneGas        uint64 // payment share of the committed txs, for the non-payment cap
+	paymentLaneRefusedGas uint64 // gas executed by txs the non-payment cap refused
+
 	witness *stateless.Witness
 
 	// sequencerMuted keeps this build out of the sequence store: the signer
@@ -361,6 +364,7 @@ func (env *environment) copy() *environment {
 		makeHeaderDuration: env.makeHeaderDuration,
 		pendingDuration:    env.pendingDuration,
 	}
+	cpy.paymentLaneGas, cpy.paymentLaneRefusedGas = env.paymentLaneGas, env.paymentLaneRefusedGas
 
 	if env.gasPool != nil {
 		gasPool := *env.gasPool
@@ -1734,18 +1738,28 @@ func (w *worker) updateSnapshot(env *environment) {
 }
 
 func (w *worker) commitTransaction(env *environment, tx *types.Transaction) ([]*types.Log, error) {
+	budget, err := w.nonPaymentBudget(env, tx)
+	if err != nil {
+		return nil, err
+	}
+
 	var (
 		snap = env.state.Snapshot()
 		gp   = env.gasPool.Gas()
 	)
 
+	env.evm.Config.NonPaymentGasBudget = budget
 	receipt, err := core.ApplyTransaction(env.evm, env.gasPool, env.state, env.header, tx, &env.header.GasUsed)
+	env.evm.Config.NonPaymentGasBudget = nil
+
 	if err != nil {
+		w.refusedByNonPaymentCap(env, err, gp-env.gasPool.Gas())
 		env.state.RevertToSnapshot(snap)
 		env.gasPool.SetGas(gp)
 
 		return nil, err
 	}
+	w.recordPaymentLaneGas(env, receipt)
 	env.txs = append(env.txs, tx)
 	env.receipts = append(env.receipts, receipt)
 	env.tcount++
@@ -2016,6 +2030,9 @@ mainloop:
 				}
 			}
 			log.Debug("Transaction interrupted due to timeout", "hash", ltx.Hash, "err", err)
+			txs.Pop()
+
+		case errors.Is(err, core.ErrNonPaymentGasCap):
 			txs.Pop()
 
 		default:

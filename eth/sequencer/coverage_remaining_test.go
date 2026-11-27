@@ -192,7 +192,7 @@ func TestExecutionRemainingBranches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("state: %v", err)
 	}
-	env := newBlockEnv(h.chain, statedb, openOn(parent, h.config, commitment.Head{}).GetBlockOpen(), nil)
+	env := newBlockEnv(h.chain, statedb, openOn(parent, h.config, commitment.Head{}).GetBlockOpen(), nil, nil)
 	tx := h.transfer(t, 0)
 	if got, receipt, err := env.applyPrepared(nil, preparedTransaction{tx: tx}); err != nil || got != tx || receipt == nil {
 		t.Fatalf("unverified prepared transaction = %v, %v, %v", got, receipt, err)

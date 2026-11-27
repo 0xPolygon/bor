@@ -64,7 +64,7 @@ func TestConsumerFollowsTheStore(t *testing.T) {
 		t.Fatalf("state: %v", err)
 	}
 
-	env1 := newBlockEnv(ex.chain, statedb, open1.GetBlockOpen(), nil)
+	env1 := newBlockEnv(ex.chain, statedb, open1.GetBlockOpen(), nil, nil)
 	if _, _, err := env1.applyRaw(raw1); err != nil {
 		t.Fatalf("local re-execution: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestConsumerFollowsTheStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("state 2: %v", err)
 	}
-	env2 := newBlockEnv(ex.chain, state2, open2.GetBlockOpen(), nil)
+	env2 := newBlockEnv(ex.chain, state2, open2.GetBlockOpen(), nil, nil)
 	if _, _, err := env2.applyRaw(raw2); err != nil {
 		t.Fatalf("local re-execution 2: %v", err)
 	}

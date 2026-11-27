@@ -40,6 +40,10 @@ func NewEnv(cfg *Config) *vm.EVM {
 		BaseFee:     cfg.BaseFee,
 		BlobBaseFee: cfg.BlobBaseFee,
 		Random:      cfg.Random,
+		// The runtime has no parent header, so the payment lane gate cannot be
+		// evaluated and the block is priced at full price. Routed through the
+		// shared helper so the missing-parent answer stays the node's.
+		PaymentLaneScaleBps: core.PaymentLaneScaleFor(cfg.ChainConfig, cfg.BlockNumber, nil),
 	}
 
 	evm := vm.NewEVM(blockContext, cfg.State, cfg.ChainConfig, cfg.EVMConfig)

@@ -69,6 +69,12 @@ type Config struct {
 	// ResultCacheConsumer tags this EVM's executor for the per-consumer
 	// cache hit/miss metrics. Set by SharedResultCaches.ApplyTo.
 	ResultCacheConsumer CacheConsumer
+
+	// NonPaymentGasBudget, set only while building a block, is the
+	// non-payment gas a transaction may still use under the payment lane
+	// cap. One that uses more is rejected after executing but before its
+	// state is finalised, so the caller must revert it to its snapshot.
+	NonPaymentGasBudget *uint64
 }
 
 // ScopeContext contains the things that are per-call, such as stack and memory,

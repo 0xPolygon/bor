@@ -221,7 +221,7 @@ func (s *session) applyOpen(open *pb.BlockOpen) {
 		s.sealed = nil
 		s.verified = nil
 	}
-	s.setEnv(newBlockEnv(s.consumer.chain, statedb, open, s.sealed))
+	s.setEnv(newBlockEnv(s.consumer.chain, statedb, open, s.sealed, parentHeader))
 	s.env.cacheable = cacheable
 	block, payload, ok := preparePending(s.env, s.env.header, common.Hash{}, nil)
 	if !ok {

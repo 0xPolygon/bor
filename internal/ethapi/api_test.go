@@ -659,7 +659,15 @@ func (b testBackend) StateAndHeaderByNumberOrHash(ctx context.Context, blockNrOr
 	if blockNr, ok := blockNrOrHash.Number(); ok {
 		return b.StateAndHeaderByNumber(ctx, blockNr)
 	}
-	panic("only implemented for number")
+	if hash, ok := blockNrOrHash.Hash(); ok {
+		header := b.chain.GetHeaderByHash(hash)
+		if header == nil {
+			return nil, nil, errors.New("header not found")
+		}
+		stateDb, err := b.chain.StateAt(header.Root)
+		return stateDb, header, err
+	}
+	panic("only implemented for number or hash")
 }
 func (b testBackend) WaitForStateCommit(ctx context.Context, root common.Hash) error {
 	return nil
