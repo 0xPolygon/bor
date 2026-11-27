@@ -39,7 +39,7 @@ jobs:
           restore-keys: ${{ runner.os }}-diffguard-
 
       - name: Install diffguard
-        run: go install github.com/0xPolygon/diffguard/cmd/diffguard@e02ef8e8841a3ee612bacc18097bab0a98e5b4d8
+        run: go install github.com/0xPolygon/diffguard/cmd/diffguard@835413b44e3820700cea0d5e391d1948b458f2e6
 
       - name: Run diffguard
         id: diffguard
