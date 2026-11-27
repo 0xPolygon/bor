@@ -175,6 +175,44 @@ func TestApplyMessage_SuccessPath(t *testing.T) {
 	require.Greater(t, gasUsed, uint64(0))
 }
 
+func TestApplyMessage_ForwardsMissingAncestor(t *testing.T) {
+	// PUSH1 0, BLOCKHASH, POP, STOP. At block 3, BLOCKHASH(0) needs headers the
+	// stub chain doesn't have.
+	blockhashStub := []byte{byte(vm.PUSH1), 0, byte(vm.BLOCKHASH), byte(vm.POP), byte(vm.STOP)}
+	cfg := newTestChainConfig()
+	header := newTestHeader()
+	header.Number = big.NewInt(3)
+
+	tests := []struct {
+		name  string
+		chain consensus.ChainHeaderReader
+		want  []uint64
+	}{
+		{name: "reporting chain", chain: &reportingChainContext{stubChainContext: stubChainContext{cfg: cfg}}, want: []uint64{0}},
+		{name: "plain chain", chain: &stubChainContext{cfg: cfg}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			statedb := newStateDBWithCode(t, map[common.Address][]byte{stateReceiverAddr: blockhashStub})
+			cx := ChainContext{Chain: tt.chain}
+			_, err := ApplyMessage(context.Background(), GetSystemMessage(stateReceiverAddr, nil), statedb, header, cfg, cx, vm.Config{})
+			require.NoError(t, err)
+			if r, ok := tt.chain.(*reportingChainContext); ok {
+				require.Equal(t, tt.want, r.missing)
+			}
+		})
+	}
+}
+
+type reportingChainContext struct {
+	stubChainContext
+	missing []uint64
+}
+
+func (r *reportingChainContext) ReportMissingAncestor(number uint64) {
+	r.missing = append(r.missing, number)
+}
+
 // newSystemMessage produces a minimal core.Message suitable for SetTxContext.
 func newSystemMessage() *core.Message {
 	return &core.Message{

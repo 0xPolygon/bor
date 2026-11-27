@@ -61,10 +61,10 @@ func isWitnessAttributableImportError(err error) bool {
 	if errors.As(err, &missingCode) {
 		return false
 	}
-	// The witness did not carry a trie node the block reads: an incomplete
-	// witness is something the server did produce.
+	// The witness did not carry a trie node or an ancestor header the block
+	// reads: an incomplete witness is something the server did produce.
 	var missingNode *trie.MissingNodeError
-	if errors.As(err, &missingNode) {
+	if errors.As(err, &missingNode) || errors.Is(err, core.ErrStatelessMissingAncestor) {
 		return true
 	}
 	for _, sentinel := range witnessAttributableMismatchErrors {
@@ -83,14 +83,15 @@ func isWitnessAttributableImportError(err error) bool {
 
 // isWitnessFaultImportError reports whether an attributable insertChain failure
 // is decided by the witness bytes alone, whatever the block: a witness that
-// fails the pre-state check, or one missing a trie node the block reads. Only
-// these strike the serving peer. An execution mismatch (state root, receipt
+// fails the pre-state check, or one missing a trie node or ancestor header the
+// block reads. Only these strike the serving peer. An execution mismatch (state
+// root, receipt
 // root, gas used, bloom, requests hash) is attributable — the witness may be at
 // fault — but it is also what every honest witness yields for an invalid block,
 // so striking on it would let a producer of invalid blocks get honest witness
 // servers jailed.
 func isWitnessFaultImportError(err error) bool {
-	if errors.Is(err, stateless.ErrInvalidWitness) {
+	if errors.Is(err, stateless.ErrInvalidWitness) || errors.Is(err, core.ErrStatelessMissingAncestor) {
 		return true
 	}
 	var missingCode *state.MissingCodeError

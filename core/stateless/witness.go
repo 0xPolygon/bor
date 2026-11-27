@@ -37,8 +37,9 @@ type HeaderReader interface {
 
 // ErrInvalidWitness matches every ValidateWitnessPreState failure caused by the
 // witness bytes themselves (no headers, a context header that is not the block's,
-// a pre-state root that is not the parent's). Failures that depend on local
-// state (parent header missing, nil witness or expected header) do not match.
+// headers that don't link to each other, a pre-state root that is not the
+// parent's). Failures that depend on local state (parent header missing, nil
+// witness or expected header) do not match.
 // Callers use it to charge the failure to the peer that served the witness.
 var ErrInvalidWitness = errors.New("invalid witness")
 
@@ -96,6 +97,10 @@ func ValidateWitnessPreState(witness *Witness, headerReader HeaderReader, expect
 		}
 	}
 
+	if err := validateWitnessHeaders(witness.Headers); err != nil {
+		return err
+	}
+
 	// Get the parent block header from the chain.
 	parentNumber := contextHeader.Number.Uint64() - 1
 	parentHeader := headerReader.GetHeader(contextHeader.ParentHash, parentNumber)
@@ -113,6 +118,30 @@ func ValidateWitnessPreState(witness *Witness, headerReader HeaderReader, expect
 			witnessPreStateRoot, parentHeader.Root, contextHeader.Number.Uint64())
 	}
 
+	return nil
+}
+
+// validateWitnessHeaders checks that every witness header after the first is
+// the parent of the one before it. BLOCKHASH walks these headers by hash, so an
+// unlinked header is never read; rejecting it here charges the serving peer
+// before execution instead of leaving it to the missing-ancestor check.
+// Headers[0] is bound by the pre-state root check that follows.
+func validateWitnessHeaders(headers []*types.Header) error {
+	for i, header := range headers {
+		if header == nil || header.Number == nil {
+			return invalidWitnessf("witness header %d is missing or has no number", i)
+		}
+		if i == 0 {
+			continue
+		}
+		child := headers[i-1]
+		if header.Number.Uint64()+1 != child.Number.Uint64() {
+			return invalidWitnessf("witness header %d has number %d, want %d", i, header.Number.Uint64(), child.Number.Uint64()-1)
+		}
+		if hash := header.Hash(); hash != child.ParentHash {
+			return invalidWitnessf("witness header %d (number %d) has hash %x, want %x", i, header.Number.Uint64(), hash, child.ParentHash)
+		}
+	}
 	return nil
 }
 

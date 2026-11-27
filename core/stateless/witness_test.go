@@ -288,6 +288,70 @@ func TestValidateWitnessPreState_MultipleHeaders(t *testing.T) {
 	}
 }
 
+func TestValidateWitnessPreState_HeaderLinkage(t *testing.T) {
+	makeChain := func() []*types.Header {
+		headers := []*types.Header{{Number: big.NewInt(96), Root: common.HexToHash("0x96")}}
+		for n := int64(97); n <= 99; n++ {
+			headers = append([]*types.Header{{
+				Number:     big.NewInt(n),
+				ParentHash: headers[0].Hash(),
+				Root:       common.BigToHash(big.NewInt(n)),
+			}}, headers...)
+		}
+		return headers // 99, 98, 97, 96
+	}
+	tests := []struct {
+		name    string
+		mutate  func(headers []*types.Header) []*types.Header
+		wantErr string
+	}{
+		{name: "ParentOnly", mutate: func(h []*types.Header) []*types.Header { return h[:1] }},
+		{name: "LinkedAncestors", mutate: func(h []*types.Header) []*types.Header { return h }},
+		{
+			name: "UnlinkedAncestor",
+			mutate: func(h []*types.Header) []*types.Header {
+				h[2] = &types.Header{Number: big.NewInt(97), Root: common.HexToHash("0xbad")}
+				return h
+			},
+			wantErr: "witness header 2 (number 97) has hash",
+		},
+		{
+			name:    "SkippedAncestor",
+			mutate:  func(h []*types.Header) []*types.Header { return []*types.Header{h[0], h[2]} },
+			wantErr: "witness header 1 has number 97, want 98",
+		},
+		{
+			name: "NilAncestor",
+			mutate: func(h []*types.Header) []*types.Header {
+				h[1] = nil
+				return h
+			},
+			wantErr: "witness header 1 is missing",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			headers := tt.mutate(makeChain())
+			reader := NewMockHeaderReader()
+			reader.AddHeader(headers[0])
+			witness := &Witness{
+				context: &types.Header{Number: big.NewInt(100), ParentHash: headers[0].Hash()},
+				Headers: headers,
+			}
+			err := ValidateWitnessPreState(witness, reader, nil)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if !errors.Is(err, ErrInvalidWitness) || !containsSubstring(err.Error(), tt.wantErr) {
+				t.Fatalf("got %v, want ErrInvalidWitness containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 // TestConsensusWithOriginalPeer tests consensus calculation including original peer
 func TestConsensusWithOriginalPeer(t *testing.T) {
 	t.Run("Case1_OriginalPeer3_RandomPeers2and3_ShouldChoose3", func(t *testing.T) {
