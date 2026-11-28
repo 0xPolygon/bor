@@ -84,19 +84,30 @@ func TestPeerPolicyBodyServingAdapter(t *testing.T) {
 	defer backend.close()
 	hash := backend.chain.GetBlockByNumber(1).Hash()
 	for _, enabled := range []bool{false, true} {
-		w := &observedWriter{}
-		p := &Peer{Peer: configuredLimitsTestPeer(t, "trusted"), rw: w}
+		w := &replyTestRW{sent: make(chan p2p.Msg, 1)}
+		limiter := NewHeavyResponseLimiter()
+		p := &Peer{Peer: configuredLimitsTestPeer(t, "trusted"), rw: w, heavyResponseLimiter: limiter}
 		var got peerpolicy.Evidence
 		if enabled {
-			p.SetObserver(func(e peerpolicy.Evidence) { got = e })
+			p.SetObserver(func(e peerpolicy.Evidence) {
+				require.Empty(t, limiter.slots, "lookup slot must be released before writing the reply")
+				got = e
+			})
 		}
-		query := GetBlockBodiesPacket{RequestId: 7, GetBlockBodiesRequest: GetBlockBodiesRequest{{}, hash}}
+		hashes := make(GetBlockBodiesRequest, 17)
+		hashes[len(hashes)-1] = hash
+		query := GetBlockBodiesPacket{RequestId: 7, GetBlockBodiesRequest: hashes}
 		if err := observedBodyReply(backend, p, query); err != nil {
 			t.Fatal(err)
 		}
-		if !w.completed {
-			t.Fatal("reply was not written")
-		}
+		require.Len(t, w.sent, 1)
+		msg := <-w.sent
+		require.Equal(t, uint64(BlockBodiesMsg), msg.Code)
+		var reply BlockBodiesRLPPacket
+		require.NoError(t, msg.Decode(&reply))
+		require.Equal(t, query.RequestId, reply.RequestId)
+		require.Equal(t, BlockBodiesRLPResponse{backend.chain.GetBodyRLP(hash)}, reply.BlockBodiesRLPResponse)
+		require.Empty(t, limiter.slots)
 		if enabled && (got.Items != 1 || got.Bytes == 0 || len(got.Hashes) != 1 || got.Hashes[0] != hash || got.ObjectBytes[0] != got.Bytes) {
 			t.Fatalf("incorrect completed reply observation: %+v", got)
 		}

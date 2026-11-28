@@ -40,6 +40,9 @@ func newReplyTestPeer(t *testing.T) (*Peer, *replyTestRW) {
 	t.Helper()
 	rw := &replyTestRW{sent: make(chan p2p.Msg, peerRequestBurst)}
 	p := NewPeer(ETH68, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil)
+	// These tests exercise reply admission and scheduling, not routed transport.
+	// Keep the mutable test reader synchronous so it cannot be prefetched.
+	p.rw = rw
 	t.Cleanup(p.Close)
 	return p, rw
 }

@@ -77,6 +77,48 @@ func TestServerPortMapping(t *testing.T) {
 	}
 }
 
+func TestServerPortMappingIncludesBulkSidecar(t *testing.T) {
+	clock := new(mclock.Simulated)
+	mockNAT := &mockNAT{mappedPort: 30000}
+	srv := Server{
+		Config: Config{
+			PrivateKey:        newkey(),
+			NoDial:            true,
+			ListenAddr:        ":0",
+			DiscAddr:          ":0",
+			EnableBulkSidecar: true,
+			NAT:               mockNAT,
+			Logger:            testlog.Logger(t, log.LvlTrace),
+			clock:             clock,
+		},
+	}
+	err := srv.Start()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	deadline := clock.Now().Add(portMapRefreshInterval)
+	for clock.Now() < deadline && mockNAT.mapRequests.Load() < 3 {
+		time.Sleep(10 * time.Millisecond)
+		clock.Run(1 * time.Second)
+	}
+
+	if reqCount := mockNAT.mapRequests.Load(); reqCount != 3 {
+		t.Fatal("wrong request count:", reqCount)
+	}
+	enr := srv.LocalNode().Node()
+	if enr.TCP() != 30000 {
+		t.Error("wrong TCP port in ENR:", enr.TCP())
+	}
+	if enr.UDP() != 30000 {
+		t.Error("wrong UDP port in ENR:", enr.UDP())
+	}
+	if endpoint, ok := enr.QUICEndpoint(); !ok || int(endpoint.Port()) != 30000 {
+		t.Fatalf("wrong QUIC endpoint after NAT mapping: ok=%v endpoint=%v", ok, endpoint)
+	}
+}
+
 type mockNAT struct {
 	mappedPort    uint16
 	mapRequests   atomic.Int32

@@ -34,15 +34,19 @@ devfakeauthor = false
   enable-block-tracking = false
 
 [p2p]
+  peer-reputation = true
+  peer-reputation-per-peer-metrics = false
   peer-idle-eviction = true
-  peer-idle-occupancy-threshold = 75
-  peer-idle-grace-period = "10m"
+  peer-idle-grace-period = "10m0s"
   peer-idle-max-removals = 1
-  peer-idle-reconnect-cooldown = "5m"
+  peer-idle-reconnect-cooldown = "5m0s"
+  peer-idle-occupancy-threshold = 75
   maxpeers = 50
   maxpendpeers = 50
   bind = "0.0.0.0"
   port = 30303
+  bulk-sidecar = false
+  bulk-port = 30304
   nodiscover = false
   nat = "any"
   netrestrict = ""
@@ -64,7 +68,7 @@ devfakeauthor = false
 
 [heimdall]
   url = "http://localhost:1317"
-  timeout = "5s"
+  timeout = "30s"
   "bor.without" = false
   grpc-address = ""
   ws-address = ""

@@ -6,7 +6,7 @@ The ```bor server``` command runs the Bor client.
 
 - ```bor.devfakeauthor```: Run miner without validator set authorization [dev mode] : Use with '--bor.withoutheimdall' (default: false)
 
-- ```bor.heimdall```: URL of Heimdall service (comma-separated for failover: "url1,url2") (default: http://localhost:1317)
+- ```bor.heimdall```: URL of Heimdall service (comma-separated for failover: "url1,url2"). Use h3://host:port to force the QUIC sidecar (default: http://localhost:1317)
 
 - ```bor.heimdallWS```: Address of Heimdall WS subscription service (comma-separated for failover: "addr1,addr2")
 
@@ -308,6 +308,10 @@ The ```bor server``` command runs the Bor client.
 
 - ```bootnodes```: Comma separated enode URLs for P2P discovery bootstrap
 
+- ```bulk-port```: UDP port for the QUIC bulk-transfer sidecar (default: 30304)
+
+- ```bulk-sidecar```: Enable the QUIC bulk-transfer sidecar for snap and large sync traffic (default: false)
+
 - ```disable-tx-propagation```: Disable transaction broadcast and announcements to all peers (default: false)
 
 - ```discovery.dns```: Comma separated list of enrtree:// URLs which will be queried for nodes to connect to
@@ -327,6 +331,20 @@ The ```bor server``` command runs the Bor client.
 - ```nodiscover```: Disables the peer discovery mechanism (manual peer addition) (default: false)
 
 - ```p2p.nosnap```: Disable serving snap sync requests to peers (snap/1 protocol is not advertised) (default: false)
+
+- ```peer-idle-eviction```: Rotate silent peers under slot pressure and request-only inbound peers after capacity refusals at full slots (requires peer reputation; disable with --peer-idle-eviction=false) (default: true)
+
+- ```peer-idle-grace-period```: Grace period for peer rotation (minimum 2m; request-only peers require at least 10m) (default: 10m0s)
+
+- ```peer-idle-max-removals```: Maximum peers rotated per check (1-64); request-only batches are separated by at least the grace period or 10m, whichever is longer (default: 1)
+
+- ```peer-idle-occupancy-threshold```: Peer slot occupancy percentage required to continue rotation (1-100; request-only batches must start at full capacity after a refusal) (default: 75)
+
+- ```peer-idle-reconnect-cooldown```: Reconnect cooldown after activity-based peer removal (1s-24h) (default: 5m0s)
+
+- ```peer-reputation```: Track peer activity and observe reputation scores (disable to also stop activity-based peer rotation) (default: true)
+
+- ```peer-reputation-per-peer-metrics```: Export peer reputation metrics labeled by peer ID (requires metrics and peer reputation) (default: false)
 
 - ```port```: Network listening port (default: 30303)
 

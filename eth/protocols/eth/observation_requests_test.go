@@ -168,6 +168,9 @@ func newObservedReplyTestPeer(t *testing.T) (*Peer, *replyTestRW) {
 	t.Helper()
 	rw := &replyTestRW{sent: make(chan p2p.Msg, peerRequestBurst)}
 	p := NewPeer(ETH68, p2p.NewPeer(enode.ID{1}, "", nil), rw, nil)
+	// Observation tests cover request and reply accounting, not routed transport.
+	// Keep the mutable test reader synchronous so it cannot be prefetched.
+	p.rw = rw
 	t.Cleanup(func() {
 		select {
 		case <-p.term:

@@ -256,6 +256,7 @@ func handleGetBlockBodies(backend Backend, msg Decoder, peer *Peer) error {
 	if err := msg.Decode(&query); err != nil {
 		return err
 	}
+
 	return observedBodyReply(backend, peer, query)
 }
 
@@ -278,7 +279,7 @@ func serviceGetBlockBodiesQuery(chain *core.BlockChain, query GetBlockBodiesRequ
 			break
 		}
 
-		if data := chain.GetBodyRLP(hash); len(data) != 0 {
+		if data := blockBodyRLP(chain, hash); len(data) != 0 {
 			bodies = append(bodies, data)
 			if served != nil {
 				served(hash, len(data))
@@ -290,13 +291,40 @@ func serviceGetBlockBodiesQuery(chain *core.BlockChain, query GetBlockBodiesRequ
 	return bodies
 }
 
+func blockBodyRLP(chain *core.BlockChain, hash common.Hash) rlp.RawValue {
+	if data := chain.GetBodyRLP(hash); len(data) != 0 {
+		return data
+	}
+	// Empty-body blocks such as genesis may lack a persisted body RLP entry.
+	header := chain.GetHeaderByHash(hash)
+	if header == nil || !header.EmptyBody() {
+		return nil
+	}
+	body := &BlockBody{Transactions: []*types.Transaction{}, Uncles: []*types.Header{}}
+	if header.WithdrawalsHash != nil {
+		body.Withdrawals = []*types.Withdrawal{}
+	}
+	data, err := rlp.EncodeToBytes(body)
+	if err != nil {
+		log.Error("Failed to encode empty block body", "hash", hash, "err", err)
+		return nil
+	}
+	return data
+}
+
 func handleGetReceipts68(backend Backend, msg Decoder, peer *Peer) error {
 	// Decode the block receipts retrieval message
 	var query GetReceiptsPacket
 	if err := msg.Decode(&query); err != nil {
 		return err
 	}
-	response := ServiceGetReceiptsQuery68(backend.Chain(), query.GetReceiptsRequest)
+
+	response, served := serveHeavyResponseQuery(peer, len(query.GetReceiptsRequest), func() []rlp.RawValue {
+		return ServiceGetReceiptsQuery68(backend.Chain(), query.GetReceiptsRequest)
+	})
+	if !served {
+		return nil
+	}
 	return peer.ReplyReceiptsRLP(query.RequestId, response)
 }
 
@@ -306,7 +334,13 @@ func handleGetReceipts69(backend Backend, msg Decoder, peer *Peer) error {
 	if err := msg.Decode(&query); err != nil {
 		return err
 	}
-	response := ServiceGetReceiptsQuery69(backend.Chain(), query.GetReceiptsRequest)
+
+	response, served := serveHeavyResponseQuery(peer, len(query.GetReceiptsRequest), func() []rlp.RawValue {
+		return ServiceGetReceiptsQuery69(backend.Chain(), query.GetReceiptsRequest)
+	})
+	if !served {
+		return nil
+	}
 	return peer.ReplyReceiptsRLP(query.RequestId, response)
 }
 

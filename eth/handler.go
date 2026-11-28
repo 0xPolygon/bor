@@ -18,6 +18,7 @@ package eth
 
 import (
 	"cmp"
+	"context"
 	crand "crypto/rand"
 	"errors"
 	"maps"
@@ -186,7 +187,8 @@ type handler struct {
 	txAnnouncementOnly   bool
 	disableTxPropagation bool
 
-	p2pServer *p2p.Server // P2P server for jailing peers
+	p2pServer            *p2p.Server // P2P server for jailing peers
+	heavyResponseLimiter *eth.HeavyResponseLimiter
 
 	// Witness protocol related fields
 	syncWithWitnesses       bool
@@ -306,6 +308,10 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		deferredAnnounces:       newDeferredAnnounceCache(deferredAnnounceCapacity),
 		witnessWaiters:          newWitnessWaiterRegistry(),
 		witnessSourceExclusions: newWitnessSourceExclusionSet(),
+	}
+
+	if config.p2pServer != nil && config.p2pServer.EnableBulkSidecar {
+		h.heavyResponseLimiter = eth.NewHeavyResponseLimiter()
 	}
 
 	log.Info("Sync with witnesses", "enabled", config.syncWithWitnesses)
@@ -529,6 +535,10 @@ func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
 	// contribution session. Install observation only after admission succeeds.
 	h.observeProtocolPeer(peer)
 	h.observeWitnessPeer(wit)
+	// The node-wide body/receipt serving limiter only applies to peers on nodes
+	// running the bulk sidecar locally.
+	peer.SetHeavyResponseLimiter(h.heavyResponseLimiter)
+	h.attachBulkSidecar(peer, snap, wit)
 	h.chainSync.handlePeerEvent()
 
 	// Bor: skip propagating transactions if flag is set
@@ -631,6 +641,25 @@ func (h *handler) runWitExtension(peer *wit.Peer, handler wit.Handler) error {
 	}
 
 	return handler(peer)
+}
+
+func (h *handler) attachBulkSidecar(peer *eth.Peer, snapPeer *snap.Peer, witPeer *wit.Peer) {
+	if h.p2pServer == nil || h.p2pServer.BulkSidecar() == nil {
+		return
+	}
+	sidecar := h.p2pServer.BulkSidecar()
+	go func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go func() {
+			select {
+			case <-peer.Peer.Done():
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+		attachBulkProtocols(ctx, sidecar, peer, snapPeer, witPeer)
+	}()
 }
 
 // jailPeer jails a peer to prevent reconnection for a period of time
