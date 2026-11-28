@@ -213,7 +213,7 @@ func (p *Peer) queueReplyWithCompletion(code uint64, packet interface{}, reserva
 	if err != nil {
 		return err
 	}
-	if len(data) > maxMessageSize {
+	if uint64(len(data)) > maxMessageSizeFor(code) {
 		return errMsgTooLarge
 	}
 	replies := p.blockReplies
@@ -239,7 +239,7 @@ func (p *Peer) sendReplyWithCompletion(code uint64, packet interface{}, complete
 	if err != nil {
 		return err
 	}
-	if size < 0 || size > maxMessageSize {
+	if uint64(size) > maxMessageSizeFor(code) {
 		return errMsgTooLarge
 	}
 	err = p.rw.WriteMsg(p2p.Msg{Code: code, Size: uint32(size), Payload: payload})
