@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/eth/downloader/whitelist"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
@@ -107,6 +108,8 @@ func (d *Downloader) handleSyncFailure(peer *peerConnection, id string, err erro
 
 func classifySyncFailure(err error) (peerFailureReason, bool) {
 	switch {
+	case errors.Is(err, consensus.ErrEngineStopped), errors.Is(err, core.ErrInsertionInterrupted):
+		return "", false
 	case errors.Is(err, core.ErrStateSyncProcessing):
 		return "", false
 	case isPrunedSidechainMismatch(err):

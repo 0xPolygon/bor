@@ -177,8 +177,11 @@ type witnessManager struct {
 	// freshly-reset timer would never be observed.
 	pokeCh chan struct{}
 
-	// Internal timer
-	witnessTimer *time.Timer // Timer to trigger witness fetches for pending blocks
+	// Internal timer and owned goroutines
+	witnessTimer  *time.Timer // Timer to trigger witness fetches for pending blocks
+	workerWg      sync.WaitGroup
+	fetchWg       sync.WaitGroup
+	fetchStopping bool // Guarded by mu; closes fetch admission before fetchWg.Wait.
 
 	// mutex protects access to mutable maps and timer manipulation so that
 	// goroutines launched by the manager (e.g. fetchWitness) cannot race with
@@ -243,17 +246,54 @@ func (m *witnessManager) stopAndDrainTimer() {
 	}
 }
 
-// start begins the witness manager's internal loop in a new goroutine.
+// start begins the witness manager's internal loop and owned cache cleanup.
+// Both terminate when the parent quit channel closes.
 func (m *witnessManager) start() {
-	// Start the TTL cache's automatic expiration
-	go m.witnessCache.Start()
-	go m.loop()
+	m.workerWg.Add(2)
+	go func() {
+		defer m.workerWg.Done()
+		m.runWitnessCache()
+	}()
+	go func() {
+		defer m.workerWg.Done()
+		m.loop()
+	}()
 }
 
-// stop cleanly shuts down the witness manager's timer and loop.
+// runWitnessCache expires entries without the start/stop race in ttlcache's
+// automatic cleanup goroutine. The parent quit channel is its sole stop signal.
+func (m *witnessManager) runWitnessCache() {
+	ticker := time.NewTicker(witnessCacheTTL)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-m.parentQuit:
+			return
+		case <-ticker.C:
+			m.witnessCache.DeleteExpired()
+		}
+	}
+}
+
+// stop cleanly shuts down the witness manager's timer. The parent quit channel
+// terminates its loop and cache cleanup, joined by BlockFetcher.Stop.
 func (m *witnessManager) stop() {
-	m.witnessTimer.Stop()
-	m.witnessCache.Stop()
+	m.mu.Lock()
+	m.fetchStopping = true
+	m.mu.Unlock()
+	m.stopAndDrainTimer()
+}
+
+// beginWitnessFetch admits a worker only while shutdown has not started. Add
+// and the stopping transition share mu, so fetchWg.Wait cannot race a late Add.
+func (m *witnessManager) beginWitnessFetch() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.fetchStopping {
+		return false
+	}
+	m.fetchWg.Add(1)
+	return true
 }
 
 // loop is the main event loop for the witness manager.
@@ -635,7 +675,13 @@ func (m *witnessManager) dispatchPeerFetches(peer string, hashAnnounceMap map[co
 			m.handleWitnessFetchFailureExt(hash, "", errors.New("missing fetch configuration"), true)
 			continue
 		}
-		go m.fetchWitness(peer, hash, announce)
+		if !m.beginWitnessFetch() {
+			continue
+		}
+		go func() {
+			defer m.fetchWg.Done()
+			m.fetchWitness(peer, hash, announce)
+		}()
 	}
 }
 
@@ -662,7 +708,20 @@ func (m *witnessManager) fetchWitness(peer string, hash common.Hash, announce *b
 // block is still pending afterwards. Returns the created request on success,
 // or ok=false after handling the failure.
 func (m *witnessManager) initiateWitnessFetch(hash common.Hash, announce *blockAnnounce, resCh chan *eth.Response) (*eth.Request, string, bool) {
+	select {
+	case <-m.parentQuit:
+		return nil, "", false
+	default:
+	}
 	req, err := announce.fetchWitness(hash, resCh)
+	select {
+	case <-m.parentQuit:
+		if req != nil {
+			_ = req.Close()
+		}
+		return nil, "", false
+	default:
+	}
 	peer := ""
 	if req != nil {
 		peer = req.Peer

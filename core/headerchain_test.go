@@ -71,6 +71,44 @@ func testInsert(t *testing.T, hc *HeaderChain, chain []*types.Header, wantStatus
 	}
 }
 
+func TestHeaderChainInterruptionSentinel(t *testing.T) {
+	var (
+		db    = rawdb.NewMemoryDatabase()
+		gspec = &Genesis{BaseFee: big.NewInt(params.InitialBaseFee), Config: params.AllEthashProtocolChanges}
+	)
+	gspec.Commit(db, triedb.NewDatabase(db, nil))
+	_, headers := makeHeaderChainWithGenesis(gspec, 1, ethash.NewFaker(), 10)
+	hc, err := NewHeaderChain(db, gspec.Config, ethash.NewFaker(), func() bool { return true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	forker := NewForkChoice(hc, nil, nil)
+	tests := []struct {
+		name string
+		run  func() error
+	}{
+		{name: "write", run: func() error {
+			_, err := hc.WriteHeaders(headers)
+			return err
+		}},
+		{name: "verification", run: func() error {
+			_, err := hc.ValidateHeaderChain(headers)
+			return err
+		}},
+		{name: "insertion", run: func() error {
+			_, err := hc.InsertHeaderChain(headers, time.Now(), forker)
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.run(); !errors.Is(err, errInsertionInterrupted) {
+				t.Fatalf("interruption error = %v, want %v", err, errInsertionInterrupted)
+			}
+		})
+	}
+}
+
 // This test checks status reporting of InsertHeaderChain.
 func TestHeaderInsertion(t *testing.T) {
 	var (

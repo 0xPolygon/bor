@@ -1188,10 +1188,11 @@ func (s *Ethereum) Stop() error {
 		s.APIBackend.relay.Close()
 	}
 
-	// Close the engine before handler else it may cause a deadlock where
-	// the heimdall is unresponsive and the syncing loop keeps waiting
-	// for a response and is unable to proceed to exit `Finalize` during
-	// block processing.
+	// Stop new insertion and peer admission without waiting, then cancel the
+	// engine before any blocking dial/handler drain. The engine remains ahead
+	// of those drains so a blocked Heimdall call cannot deadlock shutdown.
+	s.blockchain.StopInsert()
+	s.handler.requestStop()
 	s.engine.Close()
 	s.dropper.Stop()
 

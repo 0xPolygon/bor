@@ -264,6 +264,7 @@ type handler struct {
 
 	chainSync *chainSyncer
 	wg        sync.WaitGroup
+	stopOnce  sync.Once
 
 	handlerStartCh chan struct{}
 	handlerDoneCh  chan struct{}
@@ -805,6 +806,15 @@ func (h *handler) Start(maxPeers int) {
 	go h.deferredAnnouncesLoop()
 }
 
+// requestStop closes peer admission and sync admission without waiting for
+// in-flight imports. Stop retains the subscriptions and blocking drain.
+func (h *handler) requestStop() {
+	h.stopOnce.Do(func() {
+		close(h.quitSync)
+		h.peers.close()
+	})
+}
+
 func (h *handler) Stop() {
 	if h.peerPolicy != nil {
 		h.peerPolicy.UnregisterPeerMetrics()
@@ -821,15 +831,9 @@ func (h *handler) Stop() {
 	}
 	h.blockRange.stop()
 
-	// Quit chainSync and txsync64.
-	// After this is done, no new peers will be accepted.
-	close(h.quitSync)
-
-	// Disconnect existing sessions.
-	// This also closes the gate for any new registrations on the peer set.
-	// sessions which are already established but not added to h.peers yet
-	// will exit when they try to register.
-	h.peers.close()
+	// Quit chainSync and txsync64, and disconnect existing sessions. This is
+	// idempotent with the non-waiting requestStop used during early shutdown.
+	h.requestStop()
 	h.wg.Wait()
 
 	log.Info("Ethereum protocol stopped")

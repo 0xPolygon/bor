@@ -2,6 +2,7 @@ package heimdallgrpc
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -17,23 +18,34 @@ import (
 
 type stalledBorServer struct {
 	borTypes.UnimplementedQueryServer
+	responseErr error
 }
 
-func (stalledBorServer) GetSpanById(ctx context.Context, _ *borTypes.QuerySpanByIdRequest) (*borTypes.QuerySpanByIdResponse, error) {
+func (s stalledBorServer) GetSpanById(ctx context.Context, _ *borTypes.QuerySpanByIdRequest) (*borTypes.QuerySpanByIdResponse, error) {
+	if s.responseErr != nil {
+		return nil, s.responseErr
+	}
 	<-ctx.Done()
 	return nil, ctx.Err()
 }
 
-func (stalledBorServer) GetLatestSpan(ctx context.Context, _ *borTypes.QueryLatestSpanRequest) (*borTypes.QueryLatestSpanResponse, error) {
+func (s stalledBorServer) GetLatestSpan(ctx context.Context, _ *borTypes.QueryLatestSpanRequest) (*borTypes.QueryLatestSpanResponse, error) {
+	if s.responseErr != nil {
+		return nil, s.responseErr
+	}
 	<-ctx.Done()
 	return nil, ctx.Err()
 }
 
 type stalledClerkServer struct {
 	clerkTypes.UnimplementedQueryServer
+	responseErr error
 }
 
-func (stalledClerkServer) GetRecordListWithTime(ctx context.Context, _ *clerkTypes.RecordListWithTimeRequest) (*clerkTypes.RecordListWithTimeResponse, error) {
+func (s stalledClerkServer) GetRecordListWithTime(ctx context.Context, _ *clerkTypes.RecordListWithTimeRequest) (*clerkTypes.RecordListWithTimeResponse, error) {
+	if s.responseErr != nil {
+		return nil, s.responseErr
+	}
 	<-ctx.Done()
 	return nil, ctx.Err()
 }
@@ -65,15 +77,30 @@ func newStalledHeimdall(t *testing.T) (string, <-chan time.Duration) {
 	return lis.Addr().String(), remaining
 }
 
-func TestRequestsHonorConfiguredTimeout(t *testing.T) {
-	t.Parallel()
+func newCancelingHeimdall(t *testing.T) string {
+	t.Helper()
 
-	const timeout = 200 * time.Millisecond
+	lis, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	require.NoError(t, err)
 
-	tests := []struct {
-		name string
-		call func(context.Context, *HeimdallGRPCClient) error
-	}{
+	responseErr := status.Error(codes.Canceled, "server canceled")
+	srv := grpc.NewServer()
+	borTypes.RegisterQueryServer(srv, &stalledBorServer{responseErr: responseErr})
+	clerkTypes.RegisterQueryServer(srv, &stalledClerkServer{responseErr: responseErr})
+
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+
+	return lis.Addr().String()
+}
+
+type grpcClientCall struct {
+	name string
+	call func(context.Context, *HeimdallGRPCClient) error
+}
+
+func grpcClientCalls() []grpcClientCall {
+	return []grpcClientCall{
 		{"GetSpan", func(ctx context.Context, c *HeimdallGRPCClient) error {
 			_, err := c.GetSpan(ctx, 1)
 			return err
@@ -87,6 +114,14 @@ func TestRequestsHonorConfiguredTimeout(t *testing.T) {
 			return err
 		}},
 	}
+}
+
+func TestRequestsHonorConfiguredTimeout(t *testing.T) {
+	t.Parallel()
+
+	const timeout = 200 * time.Millisecond
+
+	tests := grpcClientCalls()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -107,6 +142,109 @@ func TestRequestsHonorConfiguredTimeout(t *testing.T) {
 			default:
 				t.Fatal("request reached the server without a deadline")
 			}
+		})
+	}
+}
+
+func TestCallerCancellationIsNormalized(t *testing.T) {
+	t.Parallel()
+
+	tests := grpcClientCalls()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			addr, entered := newStalledHeimdall(t)
+			client, err := NewHeimdallGRPCClient(addr, "http://127.0.0.1:1", 5*time.Second)
+			require.NoError(t, err)
+			defer client.Close()
+
+			ctx, cancel := context.WithCancel(t.Context())
+			errCh := make(chan error, 1)
+			go func() { errCh <- tt.call(ctx, client) }()
+			select {
+			case <-entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("request did not reach the server")
+			}
+			cancel()
+
+			select {
+			case err := <-errCh:
+				require.Error(t, err)
+				require.True(t, errors.Is(err, context.Canceled), "caller cancellation was not preserved: %v", err)
+				require.Equal(t, codes.Canceled, status.Code(err), "original gRPC status was not preserved: %v", err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("canceled request did not return")
+			}
+		})
+	}
+}
+
+func TestServerCancellationIsNotCallerCancellation(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range grpcClientCalls() {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			client, err := NewHeimdallGRPCClient(newCancelingHeimdall(t), "http://127.0.0.1:1", 5*time.Second)
+			require.NoError(t, err)
+			defer client.Close()
+
+			err = tt.call(t.Context(), client)
+			require.Error(t, err)
+			require.False(t, errors.Is(err, context.Canceled), "server cancellation was attributed to the live caller: %v", err)
+			require.Equal(t, codes.Canceled, status.Code(err))
+		})
+	}
+}
+
+func TestConnectionCloseIsNotCallerCancellation(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range grpcClientCalls() {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			addr, entered := newStalledHeimdall(t)
+			client, err := NewHeimdallGRPCClient(addr, "http://127.0.0.1:1", 5*time.Second)
+			require.NoError(t, err)
+			defer client.Close()
+
+			errCh := make(chan error, 1)
+			go func() { errCh <- tt.call(t.Context(), client) }()
+			select {
+			case <-entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("request did not reach the server")
+			}
+			client.Close()
+
+			select {
+			case err := <-errCh:
+				require.Error(t, err)
+				require.False(t, errors.Is(err, context.Canceled), "connection close was attributed to the live caller: %v", err)
+				require.Equal(t, codes.Canceled, status.Code(err))
+			case <-time.After(5 * time.Second):
+				t.Fatal("request did not return after connection close")
+			}
+		})
+	}
+}
+
+func TestCallerCancellationLeavesOtherFailuresUnchanged(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	for _, code := range []codes.Code{codes.Internal, codes.Unavailable} {
+		t.Run(code.String(), func(t *testing.T) {
+			rpcErr := status.Error(code, "request failed")
+			err := callerCancellation(ctx, rpcErr)
+			require.Same(t, rpcErr, err)
+			require.False(t, errors.Is(err, context.Canceled))
+			require.Equal(t, code, status.Code(err))
 		})
 	}
 }

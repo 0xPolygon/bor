@@ -3,6 +3,7 @@ package heimdallgrpc
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -13,6 +14,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 
 	grpcRetry "github.com/grpc-ecosystem/go-grpc-middleware/retry"
 
@@ -170,6 +172,16 @@ func (h *HeimdallGRPCClient) Close() {
 	if err != nil {
 		log.Error("Error closing Heimdall gRPC client connection", "err", err)
 	}
+}
+
+// callerCancellation preserves a gRPC cancellation status while also exposing
+// caller-owned cancellation through errors.Is. Server cancellations and
+// transport failures with a live caller remain ordinary RPC errors.
+func callerCancellation(ctx context.Context, err error) error {
+	if err == nil || status.Code(err) != codes.Canceled || !errors.Is(ctx.Err(), context.Canceled) {
+		return err
+	}
+	return fmt.Errorf("%w: %w", context.Canceled, err)
 }
 
 func (h *HeimdallGRPCClient) FetchStatus(ctx context.Context) (*ctypes.SyncInfo, error) {

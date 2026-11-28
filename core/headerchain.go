@@ -17,7 +17,6 @@
 package core
 
 import (
-	"errors"
 	"fmt"
 	"math/big"
 	"sync/atomic"
@@ -270,7 +269,7 @@ func (hc *HeaderChain) WriteHeaders(headers []*types.Header) (int, error) {
 	// Skip the slow disk write of all headers if interrupted.
 	if hc.procInterrupt() {
 		log.Debug("Premature abort during headers import")
-		return 0, errors.New("aborted")
+		return 0, errInsertionInterrupted
 	}
 	// Commit to disk!
 	if err := batch.Write(); err != nil {
@@ -366,7 +365,7 @@ func (hc *HeaderChain) ValidateHeaderChain(chain []*types.Header) (int, error) {
 		// If the chain is terminating, stop processing blocks
 		if hc.procInterrupt() {
 			log.Debug("Premature abort during headers verification")
-			return 0, errors.New("aborted")
+			return 0, errInsertionInterrupted
 		}
 		// Otherwise wait for headers checks and ensure they pass
 		if err := <-results; err != nil {
@@ -389,7 +388,7 @@ func (hc *HeaderChain) ValidateHeaderChain(chain []*types.Header) (int, error) {
 // or a side chain.
 func (hc *HeaderChain) InsertHeaderChain(chain []*types.Header, start time.Time, forker *ForkChoice) (WriteStatus, error) {
 	if hc.procInterrupt() {
-		return 0, errors.New("aborted")
+		return 0, errInsertionInterrupted
 	}
 
 	res, err := hc.writeHeadersAndSetHead(chain, forker)
