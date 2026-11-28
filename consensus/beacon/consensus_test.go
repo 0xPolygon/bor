@@ -24,6 +24,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/ethash"
+	"github.com/ethereum/go-ethereum/consensus/misc/eip1559"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/tracing"
@@ -230,4 +231,31 @@ func TestFinalizeAndAssembleReturnsCommitTime(t *testing.T) {
 
 		t.Logf("Commit time for Shanghai PoS block with initialized withdrawals: %v", commitTime)
 	})
+}
+
+// TestVerifyHeaderRejectsBlobFields checks that pre-Cancun headers carrying
+// blob gas fields are rejected, and that the error prints the value.
+func TestVerifyHeaderRejectsBlobFields(t *testing.T) {
+	config := &params.ChainConfig{ChainID: big.NewInt(1), LondonBlock: big.NewInt(0)}
+	engine, chain := setupBeaconEngine(config)
+	parent := createBeaconHeader(1, params.GenesisGasLimit, 1, beaconDifficulty)
+	parent.BaseFee = big.NewInt(params.InitialBaseFee)
+	value := uint64(7)
+
+	for _, tt := range []struct {
+		name string
+		set  func(*types.Header)
+		want string
+	}{
+		{"excessBlobGas", func(h *types.Header) { h.ExcessBlobGas = &value }, "invalid excessBlobGas: have 7, expected nil"},
+		{"blobGasUsed", func(h *types.Header) { h.BlobGasUsed = &value }, "invalid blobGasUsed: have 7, expected nil"},
+	} {
+		header := createBeaconHeader(2, params.GenesisGasLimit, 2, beaconDifficulty)
+		header.UncleHash = types.EmptyUncleHash
+		header.BaseFee = eip1559.CalcBaseFee(config, parent)
+		tt.set(header)
+		if err := engine.verifyHeader(chain, header, parent); err == nil || err.Error() != tt.want {
+			t.Errorf("%s: got %v, want %q", tt.name, err, tt.want)
+		}
+	}
 }

@@ -379,3 +379,29 @@ func TestFinalizeAndAssembleReturnsCommitTime(t *testing.T) {
 	t.Logf("Commit time for empty state: %v", ct1)
 	t.Logf("Commit time for state with 100 storage entries: %v", ct2)
 }
+
+// TestVerifyHeaderRejectsBlobFields checks that headers carrying blob gas
+// fields are rejected, and that the error prints the value.
+func TestVerifyHeaderRejectsBlobFields(t *testing.T) {
+	config := &params.ChainConfig{ChainID: big.NewInt(1), HomesteadBlock: big.NewInt(0)}
+	chain := createFakeChain(config)
+	engine := NewFaker()
+	parent := &types.Header{Number: big.NewInt(1), Time: 1, Difficulty: big.NewInt(131072), GasLimit: params.GenesisGasLimit}
+	value := uint64(7)
+
+	for _, tt := range []struct {
+		name string
+		set  func(*types.Header)
+		want string
+	}{
+		{"excessBlobGas", func(h *types.Header) { h.ExcessBlobGas = &value }, "invalid excessBlobGas: have 7, expected nil"},
+		{"blobGasUsed", func(h *types.Header) { h.BlobGasUsed = &value }, "invalid blobGasUsed: have 7, expected nil"},
+	} {
+		header := &types.Header{Number: big.NewInt(2), Time: 2, GasLimit: params.GenesisGasLimit}
+		header.Difficulty = engine.CalcDifficulty(chain, header.Time, parent)
+		tt.set(header)
+		if err := engine.verifyHeader(chain, header, parent, false, time.Now().Unix()); err == nil || err.Error() != tt.want {
+			t.Errorf("%s: got %v, want %q", tt.name, err, tt.want)
+		}
+	}
+}

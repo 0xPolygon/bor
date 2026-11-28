@@ -223,3 +223,23 @@ func TestCalcExcessBlobGasEIP7918(t *testing.T) {
 		}
 	}
 }
+
+// TestVerifyEIP4844HeaderBlobGasMultiple checks that blob gas used must be a
+// multiple of the per-blob gas, and that the error prints the value.
+func TestVerifyEIP4844HeaderBlobGasMultiple(t *testing.T) {
+	config := &params.ChainConfig{
+		LondonBlock: big.NewInt(0),
+		CancunBlock: big.NewInt(0),
+		BlobScheduleConfig: &params.BlobScheduleConfig{
+			Cancun: &params.BlobConfig{Target: 3, Max: 6, UpdateFraction: 3338477},
+		},
+	}
+	zero, used := uint64(0), uint64(1)
+	parent := &types.Header{Number: big.NewInt(1), ExcessBlobGas: &zero, BlobGasUsed: &zero}
+	header := &types.Header{Number: big.NewInt(2), ExcessBlobGas: &zero, BlobGasUsed: &used}
+
+	want := fmt.Sprintf("blob gas used 1 not a multiple of blob gas per blob %d", params.BlobTxBlobGasPerBlob)
+	if err := VerifyEIP4844Header(config, parent, header); err == nil || err.Error() != want {
+		t.Fatalf("got %v, want %q", err, want)
+	}
+}
