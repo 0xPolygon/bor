@@ -12,7 +12,9 @@ import (
 	"google.golang.org/grpc/status"
 
 	borTypes "github.com/0xPolygon/heimdall-v2/x/bor/types"
+	checkpointTypes "github.com/0xPolygon/heimdall-v2/x/checkpoint/types"
 	clerkTypes "github.com/0xPolygon/heimdall-v2/x/clerk/types"
+	milestoneTypes "github.com/0xPolygon/heimdall-v2/x/milestone/types"
 )
 
 type stalledBorServer struct {
@@ -38,6 +40,39 @@ func (stalledClerkServer) GetRecordListWithTime(ctx context.Context, _ *clerkTyp
 	return nil, ctx.Err()
 }
 
+type stalledCheckpointServer struct {
+	checkpointTypes.UnimplementedQueryServer
+}
+
+func (stalledCheckpointServer) GetAckCount(ctx context.Context, _ *checkpointTypes.QueryAckCountRequest) (*checkpointTypes.QueryAckCountResponse, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (stalledCheckpointServer) GetCheckpointLatest(ctx context.Context, _ *checkpointTypes.QueryCheckpointLatestRequest) (*checkpointTypes.QueryCheckpointLatestResponse, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (stalledCheckpointServer) GetCheckpoint(ctx context.Context, _ *checkpointTypes.QueryCheckpointRequest) (*checkpointTypes.QueryCheckpointResponse, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+type stalledMilestoneServer struct {
+	milestoneTypes.UnimplementedQueryServer
+}
+
+func (stalledMilestoneServer) GetMilestoneCount(ctx context.Context, _ *milestoneTypes.QueryCountRequest) (*milestoneTypes.QueryCountResponse, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (stalledMilestoneServer) GetLatestMilestone(ctx context.Context, _ *milestoneTypes.QueryLatestMilestoneRequest) (*milestoneTypes.QueryLatestMilestoneResponse, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
 // newStalledHeimdall also returns the time left on the deadline of the
 // first request it receives, so tests can check which timeout was applied.
 func newStalledHeimdall(t *testing.T) (string, <-chan time.Duration) {
@@ -58,6 +93,8 @@ func newStalledHeimdall(t *testing.T) (string, <-chan time.Duration) {
 	}))
 	borTypes.RegisterQueryServer(srv, &stalledBorServer{})
 	clerkTypes.RegisterQueryServer(srv, &stalledClerkServer{})
+	checkpointTypes.RegisterQueryServer(srv, &stalledCheckpointServer{})
+	milestoneTypes.RegisterQueryServer(srv, &stalledMilestoneServer{})
 
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
@@ -84,6 +121,26 @@ func TestRequestsHonorConfiguredTimeout(t *testing.T) {
 		}},
 		{"StateSyncEvents", func(ctx context.Context, c *HeimdallGRPCClient) error {
 			_, err := c.StateSyncEvents(ctx, 1, time.Now().Unix())
+			return err
+		}},
+		{"FetchCheckpointCount", func(ctx context.Context, c *HeimdallGRPCClient) error {
+			_, err := c.FetchCheckpointCount(ctx)
+			return err
+		}},
+		{"FetchLatestCheckpoint", func(ctx context.Context, c *HeimdallGRPCClient) error {
+			_, err := c.FetchCheckpoint(ctx, -1)
+			return err
+		}},
+		{"FetchCheckpoint", func(ctx context.Context, c *HeimdallGRPCClient) error {
+			_, err := c.FetchCheckpoint(ctx, 1)
+			return err
+		}},
+		{"FetchMilestoneCount", func(ctx context.Context, c *HeimdallGRPCClient) error {
+			_, err := c.FetchMilestoneCount(ctx)
+			return err
+		}},
+		{"FetchMilestone", func(ctx context.Context, c *HeimdallGRPCClient) error {
+			_, err := c.FetchMilestone(ctx)
 			return err
 		}},
 	}
